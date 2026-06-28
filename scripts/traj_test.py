@@ -176,6 +176,10 @@ if __name__ == '__main__':
 
     request_fast_state(m, hz=25)
 
+    controller = dynamics.PositionController()
+    ref = mission.ReferenceTrajectory([0,0,10], [20, 0, 10], speed=1)
+    fly_trajectory(m, ref, controller, duration=ref.total_time_to_wp)
+
 
 
     land(m)
