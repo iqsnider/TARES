@@ -1,10 +1,21 @@
 from pymavlink import mavutil
 import time
+import numpy as np
 
 import sim.config as config
-import sim.simplified_mission_manager as mission
+import sim.drone_test_only_mission_manager as mission
 import sim.SITL_dynamics as dynamics
 
+M = mavutil.mavlink
+
+ACCEL_ONLY = (M.POSITION_TARGET_TYPEMASK_X_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_Y_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_Z_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_VX_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_VY_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_VZ_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_YAW_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE)
 
 def connect(connection):
     # setup listener on the specified port
@@ -62,7 +73,7 @@ def arm(m):
                 return
 
         print(f"arm rejected (result={ack.result}); retrying...")
-        time.sleep()
+        time.sleep(2)
 
     raise RuntimeError("Could not arm")
 
@@ -102,37 +113,69 @@ def land(m):
     m.motors_disarmed_wait()
     print("landed and disarmed")
 
+#######################################
+#######################################
+#######################################
+#######################################
+#######################################
+#######################################
+#######################################
 
-def control_law(x, t, outerLoopControl, innerLoopControl, ref):
-    """Flight controller about the trajectory equilibrium at time t"""
-    p_PL_ref, v_PL_ref = ref(t)  # current reference
+# traj tracking stuff
+def enu_ned(v):
+    return np.array([v[1], v[0], -v[2]])            # (E,N,U) <-> (N,E,D), self-inverse
 
-    x_star = mission.equilibrium_state(
-        p_PL_ref, v_PL_ref, config.TETHER_LEN)  # equilibrium state
+def request_fast_state(m, hz=25):
+    """Bump LOCAL_POSITION_NED to control-loop rate (default streams are too slow)."""
+    m.mav.command_long_send(
+        m.target_system, m.target_component,
+        M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+        M.MAVLINK_MSG_ID_LOCAL_POSITION_NED, int(1e6 / hz), 0, 0, 0, 0, 0)
 
-    e = x - x_star  # error
+def get_state_enu(m):
+    msg = m.recv_match(type='LOCAL_POSITION_NED', blocking=True, timeout=1)
+    if msg is None:
+        return None
+    p_enu = np.array([msg.y, msg.x, -msg.z])
+    v_enu = np.array([msg.vy, msg.vx, -msg.vz])
+    return np.concatenate([p_enu, v_enu])
 
-    e[6:9] = dynamics.wrap_angle(e[6:9])  # angle wrapping
+def send_accel(m, a_ned):
+    m.mav.set_position_target_local_ned_send(
+        0, m.target_system, m.target_component,
+        M.MAV_FRAME_LOCAL_NED, ACCEL_ONLY,
+        0, 0, 0,  0, 0, 0,
+        a_ned[0], a_ned[1], a_ned[2],
+        0, 0)
 
-    # Outer-loop LQR controller
-    a_des = outerLoopControl.compute_u(e)
+def control_law(x, t, controller, ref):
+    p_ref, v_ref = ref(t)
+    return controller.compute_u(x, p_ref, v_ref)
 
-    # Inner-loop ardupilot flight controller [C_Sigma, n1, n2, n3]
-    u_pert = innerLoopControl.compute_u(x, a_des, yaw_s=0)
-    u = u_pert
-
-    return u, u_pert, e
+def fly_trajectory(m, ref, controller, duration, dt=0.04):
+    t0 = time.time()
+    while (t := time.time() - t0) <= duration:
+        x = get_state_enu(m)
+        if x is None:
+            continue
+        u_enu = control_law(x, t, controller, ref)
+        send_accel(m, enu_ned(u_enu))
+        time.sleep(dt)
+    print("trajectory done")
 
 
 if __name__ == '__main__':
-    connection = "udp:127.0.0.1:14540"
+    connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 10
-    hover_time = 20
 
     m = connect(connection)
     wait_until_armable(m)
     set_mode(m, "GUIDED")
     arm(m)
     takeoff(m, takeoff_altitude)
-    hover(m, hover_time)
+
+    request_fast_state(m, hz=25)
+
+
+
     land(m)

@@ -37,7 +37,7 @@ class ReferenceTrajectory:
         return p_PL_ref, v_PL_ref
 
 
-def equilibrium_state(p_pl_ref, v_pl_ref, tether_length):
+def tether_equilibrium_state(p_pl_ref, v_pl_ref, tether_length):
     """
     Build x* in R^16 from the payload reference
     """
