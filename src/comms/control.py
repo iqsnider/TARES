@@ -33,9 +33,14 @@ def request_fast_state(m, hz=50):
         M.MAVLINK_MSG_ID_LOCAL_POSITION_NED, int(1e6 / hz), 0, 0, 0, 0, 0)
 
 def get_state_enu(m):
-    msg = m.recv_match(type='LOCAL_POSITION_NED', blocking=True, timeout=1)
+    msg = None
+    while True:
+        latest = m.recv_match(type='LOCAL_POSITION_NED', blocking=False)
+        if latest is None:
+            break
+        msg = latest
     if msg is None:
-        return None
+        return None  # or reuse previous state
     p_enu = np.array([msg.y, msg.x, -msg.z])
     v_enu = np.array([msg.vy, msg.vx, -msg.vz])
     return np.concatenate([p_enu, v_enu])
@@ -53,6 +58,14 @@ def control_law(x, t, controller, ref):
     return controller.compute_u(x, p_ref, v_ref)
 
 def fly_trajectory(m, ref, controller, duration, dt=0.04):
+    """
+    Implementation:
+
+    controller = dynamics.PositionController()
+    ref = mission.ReferenceTrajectory([0,0,10], [20, 0, 10], speed=1)
+    control.fly_trajectory(m, ref, controller, duration=ref.total_time_to_wp)
+
+    """
     t0 = time.time()
     while (t := time.time() - t0) <= duration:
         x = get_state_enu(m)

@@ -87,7 +87,10 @@ def trajectory_from_waypoint_file(path, speed, origin):
 
     pts = [geodetic_to_enu(lat, lon, alt, lat0, lon0, alt0) for (lat, lon, alt) in nav]
 
-    return MultiPointReferenceTrajectory(pts, speed)
+    multipoint = MultiPointReferenceTrajectory(pts, speed)
+    total_time = multipoint.total_time
+
+    return multipoint, total_time
 
 
 if __name__ == "__main__":
