@@ -32,15 +32,12 @@ def request_fast_state(m, hz=50):
         M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
         M.MAVLINK_MSG_ID_LOCAL_POSITION_NED, int(1e6 / hz), 0, 0, 0, 0, 0)
 
-def get_state_enu(m):
+def get_state_enu(m, prev=None):
     msg = None
-    while True:
-        latest = m.recv_match(type='LOCAL_POSITION_NED', blocking=False)
-        if latest is None:
-            break
+    while (latest := m.recv_match(type='LOCAL_POSITION_NED', blocking=False)) is not None:
         msg = latest
     if msg is None:
-        return None  # or reuse previous state
+        return prev  # nothing new this tick -> reuse last known state
     p_enu = np.array([msg.y, msg.x, -msg.z])
     v_enu = np.array([msg.vy, msg.vx, -msg.vz])
     return np.concatenate([p_enu, v_enu])
@@ -67,11 +64,14 @@ def fly_trajectory(m, ref, controller, duration, dt=0.04):
 
     """
     t0 = time.time()
+    next_t = t0
+    x = None
     while (t := time.time() - t0) <= duration:
-        x = get_state_enu(m)
-        if x is None:
+        x = get_state_enu(m, prev=x)
+        if x is None:           # only at the very start, before first message
+            time.sleep(0.005)
             continue
-        u_enu = control_law(x, t, controller, ref)
-        send_accel(m, enu_ned(u_enu))
-        time.sleep(dt)
+        send_accel(m, enu_ned(control_law(x, t, controller, ref)))
+        next_t += dt
+        time.sleep(max(0, next_t - time.time()))
     print("trajectory done")
