@@ -1,4 +1,3 @@
-import sim.config as config
 import sim.drone_test_only_mission_manager as mission
 import sim.SITL_dynamics as dynamics
 
