@@ -23,7 +23,7 @@ if __name__ == '__main__':
     control.request_fast_state(m, hz=control_freq)
 
     # straight line
-    controller = dynamics.PositionController()
+    controller = dynamics.OuterLoopLQR()
     speed = 0.5
 
     # 20 m test
