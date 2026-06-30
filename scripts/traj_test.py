@@ -19,12 +19,17 @@ if __name__ == '__main__':
     comms.arm(m)
     comms.takeoff(m, takeoff_altitude)
 
-    control.request_fast_state(m, hz=50)
+    control_freq = 50
+    control.request_fast_state(m, hz=control_freq)
 
     # straight line
     controller = dynamics.PositionController()
-    ref = mission.ReferenceTrajectory([0, 0, 10], [20, 0, 10], speed=0.5)
+    speed = 0.5
+
+    # 20 m test
+    ref = mission.ReferenceTrajectory([0, 0, 10], [20, 0, 10], speed=speed)
+
     control.fly_trajectory(
-        m, ref, controller, duration=ref.total_time_to_wp, dt=1/50)
+        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq)
 
     comms.land(m)
