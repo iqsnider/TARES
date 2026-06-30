@@ -18,14 +18,14 @@ def _build_double_integrator():
         v_dot = u
     """
     A = np.zeros((6, 6))
-    A[0, 3] = 1.0   # px_dot = vx
-    A[1, 4] = 1.0   # py_dot = vy
-    A[2, 5] = 1.0   # pz_dot = vz
+    A[0, 3] = 1   # px_dot = vx
+    A[1, 4] = 1   # py_dot = vy
+    A[2, 5] = 1   # pz_dot = vz
 
     B = np.zeros((6, 3))
-    B[3, 0] = 1.0   # vx_dot = ax
-    B[4, 1] = 1.0   # vy_dot = ay
-    B[5, 2] = 1.0   # vz_dot = az
+    B[3, 0] = 1   # vx_dot = ax
+    B[4, 1] = 1   # vy_dot = ay
+    B[5, 2] = 1   # vz_dot = az
     return A, B
 
 
