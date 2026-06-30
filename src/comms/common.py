@@ -3,9 +3,13 @@ import time
 import numpy as np
 
 
-def connect(connection):
+def connect(connection, baud=None):
     # setup listener on the specified port
-    the_connection = mavutil.mavlink_connection(connection)
+    if baud is not None:
+        the_connection = mavutil.mavlink_connection(connection, baud)
+    else:
+        the_connection = mavutil.mavlink_connection(connection)
+
     the_connection.wait_heartbeat()
 
     # stream telemetry at 4Hz
@@ -16,7 +20,7 @@ def connect(connection):
     return the_connection
 
 
-def wait_until_armable(m, timeout=30):
+def wait_until_armable(m, timeout=60):
     """
     Waits for GPS and EKF to stabilize
     """
@@ -50,7 +54,7 @@ def arm(m):
     """
     attempts to arm ardupilot
     """
-    for attempt in range(10):
+    for attempt in range(20):
         m.mav.command_long_send(m.target_system,
                                 m.target_component,
                                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,

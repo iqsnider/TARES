@@ -102,8 +102,6 @@ def land(m):
     print("landed and disarmed")
 
 
-
-
 if __name__ == '__main__':
     # connection = "udp:127.0.0.1:14550"
     connection = "/dev/ttyACM0"
