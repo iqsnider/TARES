@@ -2,13 +2,12 @@ from pymavlink import mavutil
 import time
 
 import sim.config as config
-import sim.simplified_mission_manager as mission
 import sim.SITL_dynamics as dynamics
 
 
-def connect(connection):
+def connect(connection, baud):
     # setup listener on the specified port
-    the_connection = mavutil.mavlink_connection(connection)
+    the_connection = mavutil.mavlink_connection(connection, baud)
     the_connection.wait_heartbeat()
 
     # stream telemetry at 4Hz
@@ -106,11 +105,13 @@ def land(m):
 
 
 if __name__ == '__main__':
-    connection = "udp:127.0.0.1:14550"
+    # connection = "udp:127.0.0.1:14550"
+    connection = "/dev/ttyACM0"
+    baud = 115200
     takeoff_altitude = 10
     hover_time = 20
 
-    m = connect(connection)
+    m = connect(connection, baud)
     wait_until_armable(m)
     set_mode(m, "GUIDED")
     arm(m)
