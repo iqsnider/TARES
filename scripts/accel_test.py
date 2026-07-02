@@ -22,7 +22,6 @@ if __name__ == '__main__':
     comms.takeoff(m, takeoff_altitude)
     control.request_fast_state(m, hz=25)
 
-    # --- set up the smoke-test log ---
     os.makedirs("data", exist_ok=True)
     path = os.path.join("data", f"smoke_{datetime.now():%Y%m%d_%H%M%S}.csv")
     f = open(path, "w", newline="")

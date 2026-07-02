@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.11.0",
     "numpy>=2.5.0",
+    "pandas>=3.0.3",
     "pymavlink>=2.4.49",
     "pyserial>=3.5",
     "scipy>=1.18.0",

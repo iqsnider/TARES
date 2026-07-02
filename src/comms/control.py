@@ -68,7 +68,7 @@ def drain_aux(m, cache):
         elif t == 'ATTITUDE':
             cache['rpy'] = (msg.roll, msg.pitch, msg.yaw)
         elif t == 'SYS_STATUS':
-            cache['batt_v'] = msg.voltage_battery / 1000.0  # mV -> V
+            cache['batt_v'] = msg.voltage_battery / 1000  # mV -> V
     return cache
 
 
@@ -87,7 +87,6 @@ def fly_trajectory(m, ref, controller, duration, dt=0.04, log_dir="data"):
             drain_aux(m, cache)
 
             p_ref, v_ref = ref(t)
-            # named, so we can log it
             u = controller.compute_u(x, p_ref, v_ref)
             send_accel(m, enu_ned(u))
 
@@ -99,3 +98,21 @@ def fly_trajectory(m, ref, controller, duration, dt=0.04, log_dir="data"):
     finally:
         logger.close()
         print(f"trajectory done -> {logger.path}")
+
+
+def fly_trajectory_no_logger(m, ref, controller, duration, dt):
+    t0 = time.time()
+    next_t = t0
+    x = None
+    while (t := time.time() - t0) <= duration:
+        x = get_state_enu(m, prev=x)
+
+        p_ref, v_ref = ref(t)
+        u = controller.compute_u(x, p_ref, v_ref)
+        send_accel(m, enu_ned(u))
+        next_t += dt
+        time.sleep(max(0, next_t - time.time()))
+
+
+if __name__ == '__main__':
+    print(ACCEL_ONLY)
