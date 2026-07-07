@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq)
+        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, reassert=False)
 
     # debugging
     check_rates(m)
