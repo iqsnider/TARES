@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ArUco viewer</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:20px;background:#111;color:#eee}
+  #wrap{display:inline-block;border:1px solid #444}
+  canvas{display:block;background:#000}
+  #status{margin-bottom:8px;font-size:14px;color:#9c9}
+</style>
+</head>
+<body>
+<div id="status">connecting…</div>
+<div id="wrap"><canvas id="cv" width="960" height="540"></canvas></div>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/viewer.js"></script>
+</body>
+</html>

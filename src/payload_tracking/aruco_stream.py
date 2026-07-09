@@ -8,6 +8,36 @@ import time
 import cv2
 import numpy as np
 
+# web interface stuff
+import socketio
+import threading
+from flask import Flask, send_from_directory
+import os
+
+
+sio = socketio.Server(cors_allowed_origins="*", async_mode="threading")
+flask_app = Flask(__name__)
+flask_app.wsgi_app = socketio.WSGIApp(sio, flask_app.wsgi_app)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+@flask_app.route("/")
+def index():
+    return send_from_directory(HERE, "index.html")
+
+
+@flask_app.route("/viewer.js")
+def viewer_js():
+    return send_from_directory(HERE, "viewer.js")
+
+
+def start_web_server(host="127.0.0.1", port=5000):
+    """
+    Starts a local web server for live viewing
+    """
+    flask_app.run(host=host, port=port, threaded=True, use_reloader=False)
+
 
 def make_detector(dict_name):
     """
@@ -45,7 +75,7 @@ def open_camera(device, width, height, fourcc):
     ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"camera open: {aw}x{ah}")
 
-    return cap
+    return cap, aw, ah
 
 
 def detect(frame, detector):
@@ -65,13 +95,20 @@ def detect(frame, detector):
     return corners, ids.flatten()
 
 
+def get_marker_pose(corners, ids):
+    """
+    Determine the pose the detected ArUco marker wrt the camera
+    (we're gonna assume that the camera is fixed in the drone frame)
+    """
+
+
 def print_detections(corners, ids):
     """
     Console printing for detected markers
     """
     for c, i in zip(corners, ids):
         center = c.mean(axis=0)
-        # compact one-line-per-marker summary
+        # one-line-per-marker summary
         corner_str = " ".join(f"({x:.0f},{y:.0f})" for x, y in c)
         print(f"  id {int(i):<3d} center ({center[0]:.1f}, {center[1]:.1f})  "
               f"corners {corner_str}")
@@ -92,6 +129,7 @@ def main():
     ap.add_argument("--once", action="store_true",
                     help="grab a single frame, print, and exit")
     ap.add_argument("--verbose", default=True)
+    ap.add_argument("--viewer", default=False)
     args = ap.parse_args()
 
     # set the device id
@@ -101,7 +139,11 @@ def main():
     detector = make_detector(args.dict)
 
     # initialize the camera capture source
-    cap = open_camera(device, args.width, args.height, args.fourcc)
+    cap, aw, ah = open_camera(device, args.width, args.height, args.fourcc)
+
+    # initialize web interface
+    if args.viewer:
+        threading.Thread(target=start_web_server, daemon=True).start()
 
     while True:
         # get the frame
@@ -117,6 +159,16 @@ def main():
         # aruco corners and ids
         corners, ids = detect(frame, detector)
 
+        # web interface
+        if args.viewer:
+            markers = [
+                {"id": int(i), "corners": c.tolist(),
+                 "center": c.mean(axis=0).tolist()}
+                for c, i in zip(corners, ids)
+            ]
+            sio.emit("markers", {"w": aw, "h": ah, "markers": markers})
+
+        # console verbosity
         if args.verbose:
             if len(ids):
                 print(f"[{time.strftime('%H:%M:%S')}] {len(ids)} marker(s): "
