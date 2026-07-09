@@ -124,8 +124,7 @@ def main():
     ap.add_argument("--height", type=int, default=1080)
     ap.add_argument("--fourcc", default="MJPG",
                     help="pixel format; '' for default")
-    ap.add_argument("--dict", default="DICT_6X6_50",
-                    help="ArUco dictionary (SaS4D used DICT_6X6_50)")
+    ap.add_argument("--dict", default="DICT_6X6_50", help="ArUco dictionary")
     ap.add_argument("--once", action="store_true",
                     help="grab a single frame, print, and exit")
     ap.add_argument("--verbose", default=True)
@@ -156,6 +155,12 @@ def main():
                 break
             continue
 
+        # live view for debugging focus
+        cv2.imshow('camera view', frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:
+            break
+
         # aruco corners and ids
         corners, ids = detect(frame, detector)
 
@@ -182,6 +187,7 @@ def main():
 
     # release the image capture source
     cap.release()
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
