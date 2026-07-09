@@ -4,8 +4,9 @@ import json
 
 from ChArUco_board import SQUARES_HORIZONTALLY, SQUARES_VERTICALLY, ARUCO_DICT
 
-SQUARE_LENGTH_m = 0.027                   # Square side length (in m)
-MARKER_LENGTH_m = 0.0135                   # ArUco marker side length (in m)
+SQUARE_LENGTH_m = 0.029                   # Square side length (in m)
+# ArUco marker side length (in m)
+MARKER_LENGTH_m = SQUARE_LENGTH_m/2
 
 
 def get_calibration_parameters(img_dir):
