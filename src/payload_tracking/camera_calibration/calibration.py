@@ -52,7 +52,7 @@ def get_calibration_parameters(img_dir):
 
 
 SENSOR = 'AR0821_onsemi'
-LENS = 'See3CAM_CU81'
+LENS = 'See3CAM_CU81_M12_DFOV120'
 OUTPUT_JSON = 'calibration.json'
 
 mtx, dist = get_calibration_parameters(img_dir='./images/')
