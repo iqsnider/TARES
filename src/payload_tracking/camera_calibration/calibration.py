@@ -2,44 +2,51 @@ import cv2
 import os
 import json
 
-from ChArUco_board import *
+from ChArUco_board import SQUARES_HORIZONTALLY, SQUARES_VERTICALLY, ARUCO_DICT
+
+SQUARE_LENGTH_m = 0.027                   # Square side length (in m)
+MARKER_LENGTH_m = 0.0135                   # ArUco marker side length (in m)
 
 
 def get_calibration_parameters(img_dir):
-    # Define the aruco dictionary, charuco board and detector
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     board = cv2.aruco.CharucoBoard(
-        (SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
-    params = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(dictionary, params)
+        (SQUARES_VERTICALLY, SQUARES_HORIZONTALLY),
+        SQUARE_LENGTH_m, MARKER_LENGTH_m, dictionary)
+    charuco_detector = cv2.aruco.CharucoDetector(board)
 
-    # Load images from directory
     image_files = [os.path.join(img_dir, f)
                    for f in os.listdir(img_dir) if f.endswith(".bmp")]
-    all_charuco_ids = []
-    all_charuco_corners = []
 
-    # Loop over images and extraction of corners
+    all_object_points = []
+    all_image_points = []
+    image_size = None
+
     for image_file in image_files:
         image = cv2.imread(image_file)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        imgSize = image.shape
-        image_copy = image.copy()
-        marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(
-            image)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        image_size = gray.shape[::-1]  # (width, height) — correct order
 
-        if len(marker_ids) > 0:  # If at least one marker is detected
-            # cv2.aruco.drawDetectedMarkers(image_copy, marker_corners, marker_ids)
-            ret, charucoCorners, charucoIds = cv2.aruco.interpolateCornersCharuco(
-                marker_corners, marker_ids, image, board)
+        charuco_corners, charuco_ids, marker_corners, marker_ids = \
+            charuco_detector.detectBoard(gray)
 
-            if charucoIds is not None and len(charucoCorners) > 3:
-                all_charuco_corners.append(charucoCorners)
-                all_charuco_ids.append(charucoIds)
+        if charuco_ids is not None and len(charuco_ids) > 3:
+            obj_points, img_points = board.matchImagePoints(
+                charuco_corners, charuco_ids)
+            if obj_points is not None and len(obj_points) > 3:
+                all_object_points.append(obj_points)
+                all_image_points.append(img_points)
+        else:
+            print(f"Board not detected in {image_file}")
 
-    # Calibrate camera with extracted information
-    result, mtx, dist, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-        all_charuco_corners, all_charuco_ids, board, imgSize, None, None)
+    if len(all_object_points) < 4:
+        raise RuntimeError(
+            f"Only {len(all_object_points)} usable views. Fix image quality "
+            f"before calibrating.")
+
+    reproj_error, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
+        all_object_points, all_image_points, image_size, None, None)
+    print(f"Reprojection error: {reproj_error:.4f} px")
     return mtx, dist
 
 
