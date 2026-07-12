@@ -23,6 +23,7 @@ COLUMNS = [
     "drone_px_meas", "drone_py_meas", "drone_pz_meas",
     "drone_vx_meas", "drone_vy_meas", "drone_vz_meas",
     "drone_ax_meas", "drone_ay_meas", "drone_az_meas",
+    "drone_gyrox_meas", "drone_gyroy_meas", "drone_gyroz_meas",
     "drone_roll", "drone_pitch", "drone_yaw", "drone_yaw_rate",
     "sent_setpoint_bitmask", "echoed_setpoint_bitmask",
     "setpoint_bitmask_callback_dt",
@@ -77,6 +78,8 @@ class FlightLogger:
             "sent_wall": None,
             "echoed_bitmask": None,
             "bitmask_callback_dt": NAN,
+            # SCALED_IMU
+            "imu": (NAN,)*6,
             # SYS_STATUS
             "batt_voltage": NAN, "batt_current": NAN, "batt_rem_percent": NAN,
             # GPS_RAW_INT
@@ -132,6 +135,11 @@ class FlightLogger:
             elif mtype == "LOCAL_POSITION_NED":
                 c["fc_time_boot_ms"] = msg.time_boot_ms
                 c["ned"] = (msg.x, msg.y, msg.z, msg.vx, msg.vy, msg.vz)
+
+            # scaled imu check
+            elif mtype == "SCALED_IMU":
+                c["imu"] = (msg.xacc, msg.yacc, msg.zacc,
+                            msg.xgyro, msg.ygyro, msg.zgyro)
 
             # setpoint check
             elif mtype == "POSITION_TARGET_LOCAL_NED":
@@ -203,6 +211,7 @@ class FlightLogger:
         # initialize columns from the cache
         c = self.cache
         p, v = x[0:3], x[3:6]
+        imu = c["imu"]
         pl_pr = payload_p_ref if payload_p_ref is not None else (NAN, NAN, NAN)
         pl_vr = payload_v_ref if payload_v_ref is not None else (NAN, NAN, NAN)
         pl_a = payload_alpha if payload_alpha is not None else (NAN, NAN)
@@ -239,7 +248,8 @@ class FlightLogger:
             # drone actual
             "drone_px_meas": p[0], "drone_py_meas": p[1], "drone_pz_meas": p[2],
             "drone_vx_meas": v[0], "drone_vy_meas": v[1], "drone_vz_meas": v[2],
-            "drone_ax_meas": NAN, "drone_ay_meas": NAN, "drone_az_meas": NAN,
+            "drone_ax_meas": imu[0] , "drone_ay_meas": imu[1], "drone_az_meas": imu[2],
+            "drone_gyrox_meas": imu[3], "drone_gyroy_meas": imu[4], "drone_gyroz_meas": imu[5],
             # drone orientation
             "drone_roll": c["roll"], "drone_pitch": c["pitch"],
             "drone_yaw": c["yaw"], "drone_yaw_rate": c["yaw_rate"],
@@ -278,42 +288,3 @@ class FlightLogger:
         self.f.close()
         self.ef.flush()
         self.ef.close()
-
-# class FlightLogger:
-#     def __init__(self, data_dir="data"):
-#         os.makedirs(data_dir, exist_ok=True)
-#         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#         self.path = os.path.join(data_dir, f"flight_{stamp}.csv")
-#         self.f = open(self.path, "w", newline="")
-#         self.w = csv.writer(self.f)
-#         self.w.writerow([
-#             "wall_time", "t", "loop_dt", "mode", "armed",
-#             "px_ref", "py_ref", "pz_ref", "vx_ref", "vy_ref", "vz_ref",
-#             "px", "py", "pz", "vx", "vy", "vz",
-#             "roll", "pitch", "yaw",
-#             "ex", "ey", "ez", "pos_err_norm",
-#             "ux", "uy", "uz", "u_norm",
-#             "batt_v",
-#         ])  # all positions ENU, meters frame stated here on purpose
-#         self._last = time.time()
-#         self._n = 0
-#
-#     def log(self, t, mode, armed, p_ref, v_ref, x, u, rpy, batt_v):
-#         now = time.time()
-#         dt, self._last = now - self._last, now
-#         p, v = x[0:3], x[3:6]
-#         e = p - p_ref
-#         self.w.writerow([
-#             f"{now:.4f}", f"{t:.4f}", f"{dt:.4f}", mode, int(armed),
-#             *p_ref, *v_ref, *p, *v, *rpy,
-#             *e, np.linalg.norm(e), *u, np.linalg.norm(u), batt_v,
-#         ])
-#         self.f.flush()  # survive a crash mid-flight
-#         self._n += 1
-#         if self._n % 250 == 0:  # force to disk every 10s at 25Hz
-#             os.fsync(self.f.fileno())
-#
-#     def close(self):
-#         self.f.flush()
-#         os.fsync(self.f.fileno())
-#         self.f.close()
