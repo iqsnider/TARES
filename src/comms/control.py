@@ -101,28 +101,6 @@ def send_accel(m, a_ned, yaw=None):
     return mask
 
 
-# def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False):
-#     logger = FlightLogger()
-#     logger.note_sent(mode=m.flightmode)  # seed sent_mode
-#     t0 = time.time()
-#     next_t = t0
-#     x = None
-#     try:
-#         while (t := time.time() - t0) <= duration:
-#             logger.pump(m)
-#             x = get_state_enu(logger.cache['ned'], prev=x)
-#             p_ref, v_ref = ref(t)
-#             u = controller.compute_u(x, p_ref, v_ref)
-#             mask = send_accel(m, enu_ned(u))
-#
-#             # starts echo round-trip timer
-#             logger.note_sent(bitmask=mask)
-#             logger.log(t, x, p_ref, v_ref, u)
-#             next_t += dt
-#             time.sleep(max(0, next_t - time.time()))
-#     finally:
-#         logger.close()
-
 
 def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=False):
     logger = FlightLogger()
@@ -148,38 +126,37 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=Fa
         last_report = 0
         n_lp = 0
 
-    try:
-        while (t := time.time() - t0) <= duration:
-            logger.pump(m)
+    while (t := time.time() - t0) <= duration:
+        logger.pump(m)
 
-            # debugging
-            if reassert:
-                # checking frequency
-                lp = logger.cache['fc_time_boot_ms']
-                if lp != last_lp:
-                    n_lp += 1
-                    last_lp = lp
+        # debugging
+        if reassert:
+            # checking frequency
+            lp = logger.cache['fc_time_boot_ms']
+            if lp != last_lp:
+                n_lp += 1
+                last_lp = lp
 
-                if t - last_report > 1:
-                    print(f"LOCAL_POSITION_NED ~{n_lp/(t-last_report):.1f} Hz")
-                    n_lp = 0
-                    last_report = t
+            if t - last_report > 1:
+                print(f"LOCAL_POSITION_NED ~{n_lp/(t-last_report):.1f} Hz")
+                n_lp = 0
+                last_report = t
 
-                # re-assert the critical fast stream 1 Hz
-                if t - last_reassert > 1:
-                    set_rate(m, "LOCAL_POSITION_NED", 50)
-                    last_reassert = t
+            # re-assert the critical fast stream 1 Hz
+            if t - last_reassert > 1:
+                set_rate(m, "LOCAL_POSITION_NED", 50)
+                last_reassert = t
 
-            x = get_state_enu(logger.cache['ned'], prev=x)
-            p_ref, v_ref = ref(t)
-            u = controller.compute_u(x, p_ref, v_ref)
-            mask = send_accel(m, enu_ned(u))
-            logger.note_sent(bitmask=mask)
-            logger.log(t, x, p_ref, v_ref, u)
-            next_t += dt
-            time.sleep(max(0, next_t - time.time()))
-    finally:
-        logger.close()
+        x = get_state_enu(logger.cache['ned'], prev=x)
+        p_ref, v_ref = ref(t)
+        u = controller.compute_u(x, p_ref, v_ref)
+        mask = send_accel(m, enu_ned(u))
+        logger.note_sent(bitmask=mask)
+        logger.log(t, x, p_ref, v_ref, u)
+        next_t += dt
+        time.sleep(max(0, next_t - time.time()))
+
+    logger.close()
 
 
 def fly_trajectory_goldfish(m, ref, controller, duration, dt, yaw_lock=False):

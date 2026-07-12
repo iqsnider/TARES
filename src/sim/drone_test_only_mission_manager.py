@@ -1,6 +1,6 @@
 import numpy as np
 
-EARTH_R = 6378137
+EARTH_R = 6378137 # [m]
 
 
 def geodetic_to_enu(lat, lon, alt, lat0, lon0, alt0):
@@ -34,12 +34,13 @@ def read_wpl_waypoints(path):
 
 class ReferenceTrajectory:
     """
+    ENU
     Pick a t, get a (p_ref, v_ref)
     """
 
     def __init__(self, p_start, p_end, speed):
         self.p0 = np.asarray(p_start, dtype=float)
-        self.p1 = np.asarray(p_end, dtype=float)   # store it
+        self.p1 = np.asarray(p_end, dtype=float)
         delta = self.p1 - self.p0
         dist = np.linalg.norm(delta)
         self.total_time_to_wp = dist / speed

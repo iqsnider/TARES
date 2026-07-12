@@ -1,7 +1,6 @@
 from pymavlink import mavutil
+from collections import Counter
 import time
-import numpy as np
-
 
 def connect(connection, baud=None):
     # setup listener on the specified port
@@ -94,7 +93,7 @@ def takeoff(m, altitude):
 
 def hover(m, seconds):
     """
-    commands ardupilot to hover for a specified amount of time
+    Commands ardupilot to hover for a specified amount of time
     """
     t0 = time.time()
     while time.time() - t0 < seconds:
@@ -114,3 +113,27 @@ def land(m):
     set_mode(m, "LAND")
     m.motors_disarmed_wait()
     print("landed and disarmed")
+
+def check_rates(m, seconds=3):
+    """
+    Checks the data stream rate to make sure it's not being overwritten by a proxy on the same channel
+    """
+    counts = Counter()
+    t_end = time.time() + seconds
+    while time.time() < t_end:
+        msg = m.recv_match(blocking=True, timeout=0.5)
+        if msg:
+            counts[msg.get_type()] += 1
+    for name, n in sorted(counts.items()):
+        print(f"{name:28s} {n / seconds:6.1f} Hz")
+
+
+def set_guid_options(m, bitmask=48):
+    """
+    set GUID_OPTIONS to the specified bitmask
+    """
+    m.mav.param_set_send(m.target_system,
+                         m.target_component,
+                         b"GUID_OPTIONS",
+                         bitmask,
+                         mavutil.mavlink.MAV_PARAM_TYPE_INT32)
