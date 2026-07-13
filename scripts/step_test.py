@@ -42,8 +42,8 @@ if __name__ == '__main__':
     # debugging: make sure ardupilot complied and that the control rate is not being overwritten by a proxy on the same channel
     comms.check_rates(m)
 
-    # continue hovering with ardupilot hover request
-    comms.hover(m, 5) # 5 second hover command using arudpilot controller
+    # # continue hovering with ardupilot hover request
+    # comms.hover(m, 5) # 5 second hover command using arudpilot controller
 
     # ------- initialize autonomy -------
 
@@ -51,17 +51,23 @@ if __name__ == '__main__':
     controller = dynamics.OuterLoopLQR()
 
     # 20 m test
-    ref = mission.ReferenceTrajectory([0, 0, 10], [10, 0, 10], speed=speed)
+    startPointHoverTime = 3
+    endPointHoverTime = 3
+    ref = mission.ReferenceTrajectory([0, 0, 10], [10, 0, 10], speed=speed,
+                                      startPointHoverTime=startPointHoverTime,
+                                      endPointHoverTime=endPointHoverTime)
+
 
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, yaw_lock=True, reassert=True)
+        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=True)
 
     # ------- end autonomy -------
 
-    # continue hovering with ardupilot hover request
-    comms.hover(m, 5) # 5 second hover command using arudpilot controller
+
+    # # continue hovering with ardupilot hover request
+    # comms.hover(m, 5) # 5 second hover command using arudpilot controller
 
     # debugging: quickly check to make sure the streamrate didn't change again
     comms.check_rates(m)

@@ -143,7 +143,7 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=Fa
                 n_lp = 0
                 last_report = t
 
-            # re-assert the critical fast stream 1 Hz
+            # re-assert the fast stream 1 Hz
             if t - last_reassert > 1:
                 set_rate(m, "LOCAL_POSITION_NED", 50)
                 set_rate(m, "ATTITUDE", 50)

@@ -90,7 +90,7 @@ def acc_plot(df):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Compare commanded vs IMU-measured acceleration.")
     ap.add_argument("csv", nargs="?",
-                    default="~/TARES_SITL/data/flight_20260712_214130.csv",
+                    default="~/TARES_SITL/data/flight_20260713_113725.csv",
                     help="path to a flight CSV log")
     args = ap.parse_args()
 

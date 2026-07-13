@@ -38,26 +38,39 @@ class ReferenceTrajectory:
     Pick a t, get a (p_ref, v_ref)
     """
 
-    def __init__(self, p_start, p_end, speed):
+    def __init__(self, p_start, p_end, speed, startPointHoverTime=1, endPointHoverTime=1):
         self.p0 = np.asarray(p_start, dtype=float)
         self.p1 = np.asarray(p_end, dtype=float)
         delta = self.p1 - self.p0
         dist = np.linalg.norm(delta)
         self.total_time_to_wp = dist / speed
         self.v_const = delta / self.total_time_to_wp
+        self.startPointHoverTime = startPointHoverTime
+        self.endPointHoverTime = endPointHoverTime
+        # phase boundaries
+        self.t_move_start = startPointHoverTime
+        self.t_move_end = startPointHoverTime + self.total_time_to_wp
+
+        # total time parameter
+        self.duration = startPointHoverTime + self.total_time_to_wp + endPointHoverTime
 
     def __call__(self, t):
         """
         Return (p_ref, v_ref) at specified time.
         """
-        if t < self.total_time_to_wp:
-            p_ref = self.p0 + self.v_const*t
-            v_ref = self.v_const.copy()
-            return p_ref, v_ref
+        # hover at start
+        if t < self.t_move_start:
+            return self.p0.copy(), np.zeros(3)
 
-        p_ref = self.p0 + self.v_const*self.total_time_to_wp
-        v_ref = np.zeros(3)
-        return p_ref, v_ref
+        # moving at constant velocity
+        elif t < self.t_move_end:
+            tau = t - self.t_move_start
+            p_ref = self.p0 + self.v_const * tau
+            return p_ref, self.v_const.copy()
+
+        # hover at end
+        else:
+            return self.p1.copy(), np.zeros(3)
 
 
 class MultiPointReferenceTrajectory:
