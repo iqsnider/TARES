@@ -55,6 +55,7 @@ def request_fast_state(m, hz=50):
         "LOCAL_POSITION_NED": hz,  # controller state -> control rate
         "ATTITUDE": hz,
         "POSITION_TARGET_LOCAL_NED": hz,
+        "RAW_IMU": hz,
         "RC_CHANNELS": 10,
         "EKF_STATUS_REPORT": 5,
         "GPS_RAW_INT": 2,
@@ -146,6 +147,7 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=Fa
             if t - last_reassert > 1:
                 set_rate(m, "LOCAL_POSITION_NED", 50)
                 set_rate(m, "ATTITUDE", 50)
+                set_rate(m, "RAW_IMU", 50)
                 last_reassert = t
 
         x = get_state_enu(logger.cache['ned'], prev=x)
@@ -163,7 +165,7 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=Fa
     logger.close()
 
 
-def fly_trajectory_goldfish(m, ref, controller, duration, dt, yaw_lock=False):
+def fly_trajectory_goldfish(m, ref, controller, duration, dt):
     t0 = time.time()
     next_t = t0
     x = None

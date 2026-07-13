@@ -12,10 +12,8 @@ def wrap_angle(a):
 
 def _build_double_integrator():
     """
-    Linear translational model of the drone, acceleration as input.
-    state: [px py pz  vx vy vz]   input: [ax ay az]
-        p_dot = v
-        v_dot = u
+    Linear translational model of the drone
+    state: [px py pz vx vy vz] input: [ax ay az]
     """
     A = np.zeros((6, 6))
     A[0, 3] = 1   # px_dot = vx
@@ -37,8 +35,7 @@ def _lqr(A, B, Q, R):
 
 class OuterLoopLQR:
     """
-    6-state LQR for the drone alone. Outputs a commanded acceleration,
-    matching the PositionController.compute_u(x, p_ref, v_ref, a_ref) interface.
+    6 state lqr for just drone
     """
 
     def __init__(self,
@@ -47,13 +44,13 @@ class OuterLoopLQR:
                  r_acc=1):
         A, B = _build_double_integrator()
 
-        # state cost: penalize position and velocity error per axis
+        # state cost
         Q = np.diag([q_pos_xy, q_pos_xy, q_pos_z,
                      q_vel_xy, q_vel_xy, q_vel_z])
-        # input cost: penalize commanded acceleration
+        # control cost
         R = r_acc * np.eye(3)
 
-        self.K = _lqr(A, B, Q, R)   # (3, 6)
+        self.K = _lqr(A, B, Q, R)  # (3, 6)
 
     def compute_u(self, x, p_ref, v_ref, a_ref=None):
         p_ref = np.asarray(p_ref)
@@ -61,10 +58,8 @@ class OuterLoopLQR:
         if a_ref is None:
             a_ref = np.zeros(3)
 
-        # error in the same 6-state ordering as the model
         e = np.concatenate([x[0:3] - p_ref, x[3:6] - v_ref])
 
-        # u = -K e  drives error to zero; a_ref is feedforward
         return a_ref - self.K @ e
 
 # def _build_system():

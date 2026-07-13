@@ -56,7 +56,7 @@ if __name__ == '__main__':
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, yaw_lock=True, reassert=False)
+        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, yaw_lock=True, reassert=True)
 
     # ------- end autonomy -------
 
