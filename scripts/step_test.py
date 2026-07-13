@@ -51,12 +51,12 @@ if __name__ == '__main__':
     controller = dynamics.OuterLoopLQR()
 
     # 20 m test
-    ref = mission.ReferenceTrajectory([0, 0, 10], [0, 10, 10], speed=speed)
+    ref = mission.ReferenceTrajectory([0, 0, 10], [10, 0, 10], speed=speed)
 
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, reassert=False)
+        m, ref, controller, duration=ref.total_time_to_wp, dt=1/control_freq, yaw_lock=True, reassert=False)
 
     # ------- end autonomy -------
 

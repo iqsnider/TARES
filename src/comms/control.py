@@ -145,12 +145,16 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=Fa
             # re-assert the critical fast stream 1 Hz
             if t - last_reassert > 1:
                 set_rate(m, "LOCAL_POSITION_NED", 50)
+                set_rate(m, "ATTITUDE", 50)
                 last_reassert = t
 
         x = get_state_enu(logger.cache['ned'], prev=x)
         p_ref, v_ref = ref(t)
         u = controller.compute_u(x, p_ref, v_ref)
-        mask = send_accel(m, enu_ned(u))
+        if yaw_lock:
+            mask = send_accel(m, enu_ned(u), yaw=0)
+        else:
+            mask = send_accel(m, enu_ned(u))
         logger.note_sent(bitmask=mask)
         logger.log(t, x, p_ref, v_ref, u)
         next_t += dt
