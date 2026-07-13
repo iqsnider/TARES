@@ -10,7 +10,7 @@ def connect(connection, baud=None):
     else:
         the_connection = mavutil.mavlink_connection(connection)
 
-    #the_connection.wait_heartbeat()
+    the_connection.wait_heartbeat()
 
     # # stream telemetry at stream rate
     # the_connection.mav.request_data_stream_send(the_connection.target_system,

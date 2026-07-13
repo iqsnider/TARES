@@ -78,7 +78,7 @@ class FlightLogger:
             "sent_wall": None,
             "echoed_bitmask": None,
             "bitmask_callback_dt": NAN,
-            # SCALED_IMU
+            # RAW_IMU
             "imu": (NAN,)*6,
             # SYS_STATUS
             "batt_voltage": NAN, "batt_current": NAN, "batt_rem_percent": NAN,
@@ -136,8 +136,8 @@ class FlightLogger:
                 c["fc_time_boot_ms"] = msg.time_boot_ms
                 c["ned"] = (msg.x, msg.y, msg.z, msg.vx, msg.vy, msg.vz)
 
-            # scaled imu check
-            elif mtype == "SCALED_IMU":
+            # raw imu check
+            elif mtype == "RAW_IMU":
                 c["imu"] = (msg.xacc, msg.yacc, msg.zacc,
                             msg.xgyro, msg.ygyro, msg.zgyro)
 
