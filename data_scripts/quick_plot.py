@@ -20,30 +20,13 @@ def make_df(path):
     return pd.read_csv(os.path.expanduser(path))
 
 
-def imu_update_rate(df):
-    """Effective RAW_IMU update rate, inferred from how often the value changes.
-
-    Useful sanity check: if this is well below your loop rate, the RAW_SENSORS
-    stream isn't being requested fast enough and the measured trace will staircase.
-    """
-    t = df["cur_time"].to_numpy()
-    a = df["drone_ay_meas"].to_numpy()
-    idx = np.flatnonzero(np.diff(a) != 0) + 1
-    if len(idx) < 2:
-        return float("nan")
-    return 1.0 / np.mean(np.diff(t[idx]))
-
-
 def measured_accel_enu(df, g=G):
-    """Reconstruct inertial acceleration in ENU from body-frame specific force.
-
-    Steps: raw mg -> m/s^2, rotate body(FRD)->NED with the aerospace 3-2-1 Euler
-    angles, remove gravity, then reorder NED->ENU.  Returns (aE, aN, aU) arrays;
-    rows with missing attitude/accel come back as NaN (matplotlib skips them).
+    """
+    Reconstruct inertial acceleration in ENU from body-frame specific force
     """
     fx = df["drone_ax_meas"].to_numpy()*MG_TO_MS2
     fy = df["drone_ay_meas"].to_numpy()*MG_TO_MS2
-    fz = df["drone_az_meas"].to_numpy()* MG_TO_MS2
+    fz = df["drone_az_meas"].to_numpy()*MG_TO_MS2
 
     roll = df["drone_roll"].to_numpy()
     pitch = df["drone_pitch"].to_numpy()
@@ -54,11 +37,11 @@ def measured_accel_enu(df, g=G):
     cy, sy = np.cos(yaw), np.sin(yaw)
 
     # R_body->NED * f_body
-    n = (cp * cy) * fx + (sr * sp * cy - cr * sy) * fy + (cr * sp * cy + sr * sy) * fz
-    e = (cp * sy) * fx + (sr * sp * sy + cr * cy) * fy + (cr * sp * sy - sr * cy) * fz
-    d = (-sp) * fx + (sr * cp) * fy + (cr * cp) * fz
+    n = (cp*cy)*fx + (sr*sp*cy - cr*sy)*fy + (cr*sp*cy + sr*sy)*fz
+    e = (cp*sy)*fx + (sr*sp*sy + cr*cy)*fy + (cr*sp*sy - sr*cy)*fz
+    d = (-sp)*fx + (sr*cp)*fy + (cr*cp)*fz
 
-    # inertial acceleration = specific force + gravity([0,0,+g] in NED)
+    # inertial acceleration
     aN = n
     aE = e
     aU = -(d + g)
@@ -66,7 +49,9 @@ def measured_accel_enu(df, g=G):
 
 
 def acc_plot(df):
-    """Three-panel command-vs-measured acceleration comparison, saved to out_path."""
+    """
+    Commanded and measured acceleration plot
+    """
     t = df["cur_time"].to_numpy()
     aE, aN, aU = measured_accel_enu(df)
     recon = {"aE": aE, "aN": aN, "aU": aU}
