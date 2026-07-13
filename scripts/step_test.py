@@ -22,7 +22,7 @@ if __name__ == '__main__':
     comms.wait_until_armable(m)
 
     # AUTOTUNE avoidance
-    comms.set_mode(m, "LOITER")
+    # comms.set_mode(m, "LOITER")
 
     # tell ardupilot not to help the external control system
     comms.set_guid_options(m, 48)

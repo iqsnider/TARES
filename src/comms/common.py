@@ -42,6 +42,7 @@ def set_mode(m, mode_name):
     """
     Set the copter mode
     """
+    m.wait_heartbeat() # the heartbeat tells us the vehicle type which ensures that an unknown mode does not get enabled
     mode_id = m.mode_mapping()[mode_name]
     m.mav.set_mode_send(m.target_system,
                         mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
