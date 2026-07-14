@@ -11,6 +11,8 @@ images/
 
 # data
 data/
+*.avi
+
 
 # Distribution / packaging
 .Python
