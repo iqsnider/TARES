@@ -8,9 +8,9 @@ import sim.SITL_dynamics as dynamics
 
 
 if __name__ == '__main__':
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 10
     control_freq = 50
     speed = 0.5
@@ -20,9 +20,6 @@ if __name__ == '__main__':
 
     # check for armability
     comms.wait_until_armable(m)
-
-    # AUTOTUNE avoidance
-    # comms.set_mode(m, "LOITER")
 
     # tell ardupilot not to help the external control system
     comms.set_guid_options(m, 48)
@@ -51,8 +48,8 @@ if __name__ == '__main__':
     controller = dynamics.OuterLoopLQR()
 
     # 20 m test
-    startPointHoverTime = 3
-    endPointHoverTime = 3
+    startPointHoverTime = 5
+    endPointHoverTime = 5
     ref = mission.ReferenceTrajectory([0, 0, 10], [10, 0, 10], speed=speed,
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)
@@ -61,7 +58,7 @@ if __name__ == '__main__':
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=True)
+        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=False)
 
     # ------- end autonomy -------
 
