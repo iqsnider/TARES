@@ -6,6 +6,7 @@ import numpy as np
 
 import os
 
+NAN = float("nan")
 
 class MarkerPoseRecorder:
     def __init__(self,
@@ -105,10 +106,11 @@ class MarkerPoseRecorder:
         # if logging drone data
         if self.flight_logger is not None and self.mav is not None:
             self.flight_logger.pump(self.mav)
-            nan6 = [float("nan")] * 6
+            n, e, d, vn, ve, vd = self.flight_logger.cache["ned"]
+            x = [e, n, -d, ve, vn, -vd]                 # ENU
             nan3 = [float("nan")] * 3
             t_flight = time.time() - self._t0
-            self.flight_logger.log(t_flight, nan6, nan3, nan3, nan3)
+            self.flight_logger.log(t_flight, x, nan3, nan3, nan3)
 
         corners, ids, poses = self.get_marker_poses(frame)
         if ids is not None:

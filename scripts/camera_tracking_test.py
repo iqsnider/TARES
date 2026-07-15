@@ -24,7 +24,8 @@ if __name__ == "__main__":
     rec = MarkerPoseRecorder(marker_size_m=0.14,
                              video_out="recording_140mm.avi",
                              csv_out="poses_140mm.csv",
-                             fps=60)
+                             fps=60,
+                             flight_logger=logger)
     try:
         rec.run(mav=m)
     finally:
