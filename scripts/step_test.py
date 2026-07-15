@@ -16,7 +16,7 @@ if __name__ == '__main__':
     speed = 0.5
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # check for armability
     comms.wait_until_armable(m)

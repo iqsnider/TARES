@@ -3,7 +3,6 @@ import csv
 import json
 import time
 import numpy as np
-from payload_tracking.camera_calibration.ChArUco_board import ARUCO_DICT
 
 import os
 
@@ -14,7 +13,13 @@ class MarkerPoseRecorder:
                  marker_size_m=0.14,
                  video_out="recording.avi",
                  csv_out="poses.csv",
-                 fps=60):
+                 fps=60,
+                 aruco_dict=cv2.aruco.DICT_4X4_250,
+                 flight_logger=None):
+        # logging
+        self.flight_logger = flight_logger
+        self.mav = None
+
         self.marker_size_m = marker_size_m
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
@@ -27,7 +32,7 @@ class MarkerPoseRecorder:
         self.dist = np.array(calib["dist"], dtype=np.float64)
 
         # aruco detector
-        dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
+        dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict)
         self.detector = cv2.aruco.ArucoDetector(
             dictionary, cv2.aruco.DetectorParameters())
 
@@ -84,9 +89,9 @@ class MarkerPoseRecorder:
 
         self.csv_file = open(self.csv_out, "w", newline="")
         self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(
-            ["frame", "time_s", "marker_id",
-             "rx", "ry", "rz", "x", "y", "z", "range_m"])
+        self.csv_writer.writerow(["frame", "time_s", "marker_id",
+                                  "rx", "ry", "rz", "x", "y", "z", "range_m",
+                                  "u_px", "v_px"])
 
         self.frame_idx = 0
         self._t0 = time.time()
@@ -97,9 +102,24 @@ class MarkerPoseRecorder:
 
         Returns the poses dict for this frame.
         """
+        # if logging drone data
+        if self.flight_logger is not None and self.mav is not None:
+            self.flight_logger.pump(self.mav)
+            nan6 = [float("nan")] * 6
+            nan3 = [float("nan")] * 3
+            t_flight = time.time() - self._t0
+            self.flight_logger.log(t_flight, nan6, nan3, nan3, nan3)
+
         corners, ids, poses = self.get_marker_poses(frame)
         if ids is not None:
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+
+        # map marker_id -> pixel center
+        centers = {}
+        if ids is not None:
+            for marker_corners, marker_id in zip(corners, ids.flatten()):
+                c = marker_corners[0].mean(axis=0)   # mean of 4 corners -> (u, v)
+                centers[int(marker_id)] = c
 
         t = time.time() - self._t0
         if poses:
@@ -111,23 +131,26 @@ class MarkerPoseRecorder:
                 dist_m = float(np.linalg.norm(tvec))
                 print(f"id {marker_id}: x={x:+.3f} y={y:+.3f} z={z:+.3f} m  "
                       f"range={dist_m:.3f} m")
-                self.csv_writer.writerow(
-                    [self.frame_idx, f"{t:.4f}", marker_id,
-                     f"{rx:.6f}", f"{ry:.6f}", f"{rz:.6f}",
-                     f"{x:.6f}", f"{y:.6f}", f"{z:.6f}", f"{dist_m:.6f}"])
+                u, v = centers[marker_id]
+                self.csv_writer.writerow([self.frame_idx, f"{t:.4f}", marker_id,
+                                          f"{rx:.6f}", f"{ry:.6f}", f"{rz:.6f}",
+                                          f"{x:.6f}", f"{y:.6f}", f"{z:.6f}", f"{dist_m:.6f}",
+                                          f"{u:.2f}", f"{v:.2f}"])
         else:
             nan = float("nan")
             print("no marker detected")
             self.csv_writer.writerow(
                 [self.frame_idx, f"{t:.4f}", nan,
-                 nan, nan, nan, nan, nan, nan, nan])
+                 nan, nan, nan, nan, nan, nan, nan, nan, nan])
 
         self.writer.write(frame)
         self.frame_idx += 1
         return poses
 
-    def run(self, camera_index=0):
+    def run(self, camera_index=0, mav=None):
         """Open everything and record until Ctrl+C or camera failure."""
+        self.mav = mav
+
         self.open(camera_index)
         print("recording... press Ctrl+C to stop")
         try:
