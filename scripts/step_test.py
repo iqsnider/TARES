@@ -11,9 +11,9 @@ if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
     # connection = "udp:127.0.0.1:14550"
-    takeoff_altitude = 10
+    takeoff_altitude = 15
     control_freq = 50
-    speed = 0.5
+    speed = 0.25
 
     # add baud here if connected to real drone
     m = comms.connect(connection, baud)
@@ -22,7 +22,7 @@ if __name__ == '__main__':
     comms.wait_until_armable(m)
 
     # tell ardupilot not to help the external control system
-    comms.set_guid_options(m, 48)
+    comms.set_guid_options(m, 48) # this did not cause the wild behavior
 
     # GUIDED mode is easiest for external commands
     comms.set_mode(m, "GUIDED")
@@ -37,10 +37,10 @@ if __name__ == '__main__':
     control.request_fast_state(m, hz=control_freq)
 
     # debugging: make sure ardupilot complied and that the control rate is not being overwritten by a proxy on the same channel
-    comms.check_rates(m)
+    # comms.check_rates(m) # this did not cause the wild behavior
 
     # # continue hovering with ardupilot hover request
-    # comms.hover(m, 5) # 5 second hover command using arudpilot controller
+    comms.hover(m, 5) # 5 second hover command using arudpilot controller
 
     # ------- initialize autonomy -------
 
@@ -48,17 +48,19 @@ if __name__ == '__main__':
     controller = dynamics.OuterLoopLQR()
 
     # 20 m test
-    startPointHoverTime = 5
-    endPointHoverTime = 5
-    ref = mission.ReferenceTrajectory([0, 0, 10], [10, 0, 10], speed=speed,
+    startPointHoverTime = 0 # second test was zero but with ardupilot hover commands
+    endPointHoverTime = 0 # same here
+    ref = mission.ReferenceTrajectory([0, 0, 15], [0, 3, 15], speed=speed,
                                       startPointHoverTime=startPointHoverTime,
-                                      endPointHoverTime=endPointHoverTime)
+                                      endPointHoverTime=endPointHoverTime) # first test was 5m E at 0.5 m/s
+
+    comms.hover(m, seconds=5)
 
 
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=False)
+        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=False, reassert=False)
 
     # ------- end autonomy -------
 
@@ -67,7 +69,7 @@ if __name__ == '__main__':
     # comms.hover(m, 5) # 5 second hover command using arudpilot controller
 
     # debugging: quickly check to make sure the streamrate didn't change again
-    comms.check_rates(m)
+    # comms.check_rates(m) # this did not cause the wild behavior
 
     # No.
     # comms.land(m)
