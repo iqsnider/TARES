@@ -13,7 +13,7 @@ if __name__ == '__main__':
     # connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 15
     control_freq = 50
-    speed = 0.25
+    speed = 0.5
 
     # add baud here if connected to real drone
     m = comms.connect(connection, baud)
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     # comms.check_rates(m) # this did not cause the wild behavior
 
     # # continue hovering with ardupilot hover request
-    comms.hover(m, 5) # 5 second hover command using arudpilot controller
+    # comms.hover(m, 5)
 
     # ------- initialize autonomy -------
 
@@ -48,19 +48,19 @@ if __name__ == '__main__':
     controller = dynamics.OuterLoopLQR()
 
     # 20 m test
-    startPointHoverTime = 0 # second test was zero but with ardupilot hover commands
-    endPointHoverTime = 0 # same here
-    ref = mission.ReferenceTrajectory([0, 0, 15], [0, 3, 15], speed=speed,
+    startPointHoverTime = 5
+    endPointHoverTime = 5
+    ref = mission.ReferenceTrajectory([0, 0, 15], [5, 0, 15], speed=speed,
                                       startPointHoverTime=startPointHoverTime,
-                                      endPointHoverTime=endPointHoverTime) # first test was 5m E at 0.5 m/s
+                                      endPointHoverTime=endPointHoverTime)
 
-    comms.hover(m, seconds=5)
+    # comms.hover(m, seconds=5)
 
 
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=False, reassert=False)
+        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=False)
 
     # ------- end autonomy -------
 

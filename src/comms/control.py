@@ -103,7 +103,7 @@ def send_accel(m, a_ned, yaw=None):
 
 
 
-def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=False, reassert=False):
+def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=False):
     logger = FlightLogger()
     logger.note_sent(mode=m.flightmode)
 
@@ -180,4 +180,4 @@ def fly_trajectory_goldfish(m, ref, controller, duration, dt):
 
 
 if __name__ == '__main__':
-    print(ACCEL_ONLY)
+    print(ACCEL_ONLY_LOCK_YAW)

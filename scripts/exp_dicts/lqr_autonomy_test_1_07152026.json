@@ -1,0 +1,25 @@
+{
+  "connection": "/dev/ttyACM0",
+  "baud": 115200,
+  "takeoff_altitude": 15,
+  "control_freq": 50,
+  "speed": 0.5,
+  "guid_options_bitmask": 48,
+  "mode": "GUIDED",
+  "controller": "OuterLoopLQR",
+  "startPointHoverTime": 5,
+  "endPointHoverTime": 5,
+  "reference_trajectory": {
+    "p_start": [0, 0, 15],
+    "p_end": [5, 0, 15],
+    "speed": 0.5,
+    "startPointHoverTime": 5,
+    "endPointHoverTime": 5
+  },
+  "fly_trajectory": {
+    "duration": "ref.duration",
+    "dt": 0.02,
+    "yaw_lock": true,
+    "reassert": false
+  }
+}
