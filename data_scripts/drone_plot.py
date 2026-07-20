@@ -292,7 +292,7 @@ def rc_plot(df, t_takeover, save=None):
 
 def trajectory_plot(df, save=None):
     """
-    East-North trajectory of drone, colored by flight mode.
+    Plot 7: East-North trajectory of drone, colored by flight mode.
     Reference trajectory is also shown.
     """
     E = df["drone_px_meas"].to_numpy()
@@ -324,6 +324,52 @@ def trajectory_plot(df, save=None):
 
     fig.tight_layout()
 
+    if save:
+        fig.savefig(save, dpi=110)
+
+ 
+def _set_equal_3d(ax, X, Y, Z):
+    """Equal data aspect for a 3D axes (matplotlib has no axis('equal') in 3D)."""
+    xr, yr, zr = np.ptp(X), np.ptp(Y), np.ptp(Z)
+    r = max(xr, yr, zr) / 2 or 1.0
+    cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
+    ax.set_xlim(cx-r, cx+r); ax.set_ylim(cy-r, cy+r); ax.set_zlim(cz-r, cz+r)
+    try:
+        ax.set_box_aspect((1, 1, 1))
+    except Exception:
+        pass
+
+def trajectory_plot_3d(df, save=None):
+    """
+    3D East-North-Up trajectory of the drone, colored by flight mode, with the
+    reference trajectory overlaid. 3D counterpart of trajectory_plot.
+    """
+    E = df["drone_px_meas"].to_numpy()
+    N = df["drone_py_meas"].to_numpy()
+    U = df["drone_pz_meas"].to_numpy()
+    fig = plt.figure(figsize=(8.5, 8))
+    ax = fig.add_subplot(111, projection="3d")
+ 
+    seen = set()
+    for i, j, mode in _mode_runs(df):
+        color = MODE_SHADING.get(mode, ("0.7", 0))[0]     # neutral gray if unknown
+        sl = slice(i, min(j + 2, len(df)))                # +1 pt to connect segments
+        lbl = f"drone ({mode})" if mode not in seen else None
+        ax.plot(E[sl], N[sl], U[sl], color=color, lw=1.8, label=lbl)
+        seen.add(mode)
+ 
+    if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(df.columns):
+        ax.plot(df["drone_px_ref"], df["drone_py_ref"], df["drone_pz_ref"],
+                "k--", lw=1.5, label="reference")
+ 
+    ax.scatter([E[0]], [N[0]], [U[0]], c="red", s=45, label="start")
+    ax.scatter([0], [0], [0], c="black", marker="x", s=70, label="local origin")
+ 
+    ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.set_zlabel("Up [m]")
+    ax.set_title("3D trajectory (ENU), colored by mode")
+    _set_equal_3d(ax, np.append(E, 0), np.append(N, 0), np.append(U, 0))
+    ax.legend(fontsize=8, loc="best")
+    fig.tight_layout()
     if save:
         fig.savefig(save, dpi=110)
 
@@ -359,6 +405,7 @@ if __name__ == "__main__":
     ctrl_freq_plot(df, mask, target_hz=args.target_hz, save=out("ctrlfreq"))
     rc_plot(df, t_takeover, save=out("rc"))
     trajectory_plot(df, save=out("trajectory"))
+    trajectory_plot_3d(df, save=out("trajectory_3d"))
 
     if not args.outdir:
         plt.show()

@@ -5,6 +5,7 @@ EARTH_R = 6378137 # [m]
 
 def geodetic_to_enu(lat, lon, alt, lat0, lon0, alt0):
     """
+    TODO: work in progress
     Convers lat lon to enu
     """
     dlat = np.radians(lat - lat0)
@@ -18,6 +19,7 @@ def geodetic_to_enu(lat, lon, alt, lat0, lon0, alt0):
 
 def read_wpl_waypoints(path):
     """
+    TODO: work in progress
     Parse a mission planner wp file
     """
     pts = []
@@ -34,7 +36,7 @@ def read_wpl_waypoints(path):
 
 class ReferenceTrajectory:
     """
-    ENU
+    ENU. A bare bones reference trajectory. This class should be inherited/passed into a wrapper class to ensure vehicle safety.
     Pick a t, get a (p_ref, v_ref)
     """
 
@@ -73,6 +75,7 @@ class ReferenceTrajectory:
             return self.p1.copy(), np.zeros(3)
 
 
+
 class MultiPointReferenceTrajectory:
     """
     Chains together multiple straight line reference trajectories from a collection of points
@@ -107,6 +110,8 @@ def trajectory_from_waypoint_file(path, speed, origin=None):
     total_time = multipoint.total_time
 
     return multipoint, total_time
+
+
 
 
 if __name__ == "__main__":

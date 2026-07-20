@@ -60,6 +60,7 @@ def request_fast_state(m, hz=50):
         "EKF_STATUS_REPORT": 5,
         "GPS_RAW_INT": 2,
         "SYS_STATUS":  2,  # battery
+        "HEARTBEAT": hz,
     }
     for name, rate in rates.items():
         set_rate(m, name, rate)
@@ -114,6 +115,7 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=Fal
         logger.pump(m)
         x = get_state_enu(logger.cache['ned'], prev=None)
         if time.time() > t_wait:
+            print("Here 2")
             raise RuntimeError("no LOCAL_POSITION_NED within 5s")
         time.sleep(0.01)
 

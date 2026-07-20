@@ -8,15 +8,15 @@ import sim.SITL_dynamics as dynamics
 
 
 if __name__ == '__main__':
-    connection = "/dev/ttyACM0"
-    baud = 115200
-    # connection = "udp:127.0.0.1:14550"
+    # connection = "/dev/ttyACM0"
+    # baud = 115200
+    connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 15
     control_freq = 50
     speed = 0.5
 
     # add baud here if connected to real drone
-    m = comms.connect(connection, baud)
+    m = comms.connect(connection)
 
     # check for armability
     comms.wait_until_armable(m)
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     # run autonomy
     print("running custom controller...")
     control.fly_trajectory(
-        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=False)
+        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=True)
 
     # ------- end autonomy -------
 
