@@ -60,7 +60,6 @@ def request_fast_state(m, hz=50):
         "EKF_STATUS_REPORT": 5,
         "GPS_RAW_INT": 2,
         "SYS_STATUS":  2,  # battery
-        "HEARTBEAT": hz,
     }
     for name, rate in rates.items():
         set_rate(m, name, rate)
@@ -104,7 +103,7 @@ def send_accel(m, a_ned, yaw=None):
 
 
 
-def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=False):
+def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, yaw_ref=None, reassert=False):
     logger = FlightLogger()
     logger.note_sent(mode=m.flightmode)
 
@@ -112,22 +111,34 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=Fal
     x = None
     t_wait = time.time() + 5
     while x is None:
+        # get values from fc
         logger.pump(m)
+
+        # intialize the state
         x = get_state_enu(logger.cache['ned'], prev=None)
+
+        # set yaw_ref to current yaw when yaw locking and no yaw reference is specified
+        if yaw_lock and yaw_ref==None:
+            yaw_ref = logger.cache['yaw']
+
         if time.time() > t_wait:
             raise RuntimeError("no LOCAL_POSITION_NED within 5s")
+
+        # wait 10ms before retrying
         time.sleep(0.01)
 
+
+    # intiialize debugging values
+    last_reassert = 0
+    last_lp = logger.cache['fc_time_boot_ms']
+    last_report = 0
+    n_lp = 0
+
+    # intialize time for control loop
     t0 = time.time()
     next_t = t0
 
-    # debugging
-    if reassert:
-        last_reassert = 0
-        last_lp = logger.cache['fc_time_boot_ms']
-        last_report = 0
-        n_lp = 0
-
+    # begin the control loop and run for the duration of the reference trajectory
     while (t := time.time() - t0) <= duration:
         logger.pump(m)
 
@@ -151,18 +162,37 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=Fal
                 set_rate(m, "RAW_IMU", 50)
                 last_reassert = t
 
+        # get current state p,v
         x = get_state_enu(logger.cache['ned'], prev=x)
+
+        # get the reference p,v from the trajectory
         p_ref, v_ref = ref(t)
+
+        # compute the control input (acceleration setpoints)
         u = controller.compute_u(x, p_ref, v_ref)
+
+        # set setpoint msg bitmasks depending on whether or not we are commanding yaw
         if yaw_lock:
-            mask = send_accel(m, enu_ned(u), yaw=0)
+            mask = send_accel(m, enu_ned(u), yaw=yaw_ref)
         else:
             mask = send_accel(m, enu_ned(u))
+
+        # confirm the bitmask with the FC
         logger.note_sent(bitmask=mask)
-        logger.log(t, x, p_ref, v_ref, u)
+
+        # log sent values
+        if yaw_ref is not None:
+            logger.log(t, x, p_ref, v_ref, u, yaw_ref=yaw_ref)
+        else:
+            logger.log(t, x, p_ref, v_ref, u)
+
+
+        # time step
         next_t += dt
         time.sleep(max(0, next_t - time.time()))
 
+
+    # clear the buffer
     logger.close()
 
 
@@ -180,5 +210,6 @@ def fly_trajectory_goldfish(m, ref, controller, duration, dt):
         time.sleep(max(0, next_t - time.time()))
 
 
+# check math
 if __name__ == '__main__':
     print(ACCEL_ONLY_LOCK_YAW)
