@@ -43,12 +43,15 @@ if __name__ == '__main__':
     logger = FlightLogger()
 
     # initalize control communications and prepare datastream for high rate control requests
-    controlLink = ControlComms(m, control_frequency=control_freq, logger=logger) 
+    controlLink = ControlComms(m,
+                               control_frequency=control_freq,
+                               logger=logger, 
+                               rec=False) 
 
     # 5 m test
     startPointHoverTime = 5
     endPointHoverTime = 5
-    ref = mission.SafeTrajectory(m, None, [5, 0, 0], speed=speed,
+    ref = mission.SafeTrajectory(m, None, [50, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,
                                  startFromCurrentPosition=True,
@@ -64,7 +67,10 @@ if __name__ == '__main__':
     # define outer-loop control law
     controller = dynamics.OuterLoopLQR()
 
-    controlLink.fly_trajectory(ref, controller, duration=ref.duration,
-                               yaw_lock=True, reassert=True)
+    controlLink.fly_drone_trajectory(ref, 
+                               controller, 
+                               duration=ref.duration,
+                               yaw_lock=True, 
+                               reassert=True)
     # close the logger
     logger.close()

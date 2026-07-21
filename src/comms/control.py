@@ -7,6 +7,7 @@ import sim.drone_test_only_mission_manager as mission
 import sim.SITL_dynamics as dynamics
 
 from logs.flight import FlightLogger
+from payload_tracking.aruco_lib import MarkerPoseRecorder
 
 
 M = mavutil.mavlink
@@ -33,7 +34,7 @@ class ControlComms:
     A library of functions for sending/managing control communications for a given mav connection.
     Makes sure the time and logger are continuosly operating from object intialization.
     """
-    def __init__(self, m, control_frequency=50, logger=None):
+    def __init__(self, m, control_frequency=50, logger=None, rec=True):
         # connection and frequency availability
         self.m = m
         self.hz = control_frequency
@@ -52,6 +53,11 @@ class ControlComms:
 
         # initialize control states
         self._initialize_control_logs()
+
+        # initialize camera recording
+        if rec:
+            pass
+
 
 
     def _initialize_control_logs(self):
@@ -154,7 +160,10 @@ class ControlComms:
 
 
 
-    def fly_trajectory(self, ref, controller, duration, yaw_lock=True, yaw_ref=None, reassert=False):
+    def fly_drone_trajectory(self, ref, controller, duration, yaw_lock=True, yaw_ref=None, reassert=False):
+        """
+        Trajectory following control loop for only the drone
+        """
 
         # compute time step
         dt = 1/self.hz
@@ -228,6 +237,20 @@ class ControlComms:
             # time step
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
+
+
+    def get_payload_pose(self):
+        """
+        Calculates the alpha_x, alpha_y, dalpha_x, and dalpha_y from the aruco pose data
+        """
+        pass
+
+
+    def fly_payload_trajectory(self):
+        """
+        fly the trajectory for payload tracking
+        """
+        pass
 
 
 
