@@ -19,6 +19,7 @@ if __name__ == '__main__':
     speed = 2
 
 
+
     # add baud here if connected to real drone
     m = comms.connect(connection)
 
@@ -65,4 +66,5 @@ if __name__ == '__main__':
 
     controlLink.fly_trajectory(ref, controller, duration=ref.duration,
                                yaw_lock=True, reassert=True)
-    controlLink.end_control_log()
+    # close the logger
+    logger.close()

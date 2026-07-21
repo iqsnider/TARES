@@ -230,9 +230,6 @@ class ControlComms:
             time.sleep(max(0, next_t - time.time()))
 
 
-    def end_control_log(self):
-        self.logger.close()
-
 
 def get_state_enu(ned, prev=None):
     """
