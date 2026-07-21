@@ -51,7 +51,7 @@ if __name__ == '__main__':
     # 5 m test
     startPointHoverTime = 5
     endPointHoverTime = 5
-    ref = mission.SafeTrajectory(m, None, [50, 0, 0], speed=speed,
+    ref = mission.SafeTrajectory(m, None, [10, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,
                                  startFromCurrentPosition=True,

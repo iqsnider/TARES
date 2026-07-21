@@ -1,5 +1,6 @@
 import sim.drone_test_only_mission_manager as drone_only_mission
 import sim.payload_mission_manager as payload_control_mission
+import sim.config as config
 
 from comms.control import get_state_enu
 
@@ -118,7 +119,3 @@ class SafeTrajectory:
             safe_start_pos_flag = True
 
         return safe_start_pos_flag
-
-
-
-

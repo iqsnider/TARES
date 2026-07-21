@@ -30,7 +30,8 @@ COLUMNS = [
     "batt_voltage", "batt_current", "batt_rem_percent",
     "GPS_fix_type", "sat_count", "HDOP",
     "ekf_flags", "ekf_pos_horiz_var", "ekf_pos_vert_var", "ekf_vel_var",
-    "ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8"]
+    "ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8",
+    "servo1", "servo2", "servo3", "servo4", "servo5", "servo6", "servo7", "servo8"]
 
 NAN = float("nan")
 
@@ -89,6 +90,8 @@ class FlightLogger:
             "ekf_pos_vert_var": NAN, "ekf_vel_var": NAN,
             # RC_CHANNELS ch1-8 of the spektrum transmitter
             "rc": [NAN]*8,
+            # SERVO_OUTPUT_RAW servo1-8 otuputs to the motors/servos
+            "servo": [NAN]*8,
             # COMMAND_ACK for debugging
             "last_cmd": None, "last_cmd_result": None}
 
@@ -176,6 +179,10 @@ class FlightLogger:
             elif mtype == "RC_CHANNELS":
                 c["rc"] = [getattr(msg, f"chan{i}_raw")
                            for i in range(1, 9)]  # PWM us
+            # drain the motor/servo outputs
+            elif mtype == "SERVO_OUTPUT_RAW":
+                c["servo"] = [getattr(msg, f"servo{i}_raw")
+                              for i in range(1, 9)]  # PWM us
 
             # command acknowledgement check
             elif mtype == "COMMAND_ACK":
@@ -270,6 +277,10 @@ class FlightLogger:
         # RC channel values
         for i in range(8):
             row[f"ch{i + 1}"] = c["rc"][i]
+
+        # servo values
+        for i in range(8):
+            row[f"servo{i + 1}"] = c["servo"][i]
 
         # add to csv file
         self.w.writerow([row.get(col, "") for col in COLUMNS])

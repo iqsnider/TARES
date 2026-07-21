@@ -297,6 +297,29 @@ def rc_plot(df, t_takeover, save=None):
     if save:
         fig.savefig(save, dpi=110)
 
+def servo_plot(df, t_takeover, save=None):
+    """
+    Plot 6.5: servo PWM vs time
+    """
+    t = df["cur_time"].to_numpy()
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+
+    for ch in [f"servo{i}" for i in range(1, 9)]:
+        if ch in df:
+            ax.plot(t, df[ch], label=ch)
+
+    ax.set_xlabel("Time [s]"); ax.set_ylabel("PWM")
+    ax.set_title("Servo PWM vs Time")
+
+    ax.grid(True, alpha=0.3)
+    _shade_modes(ax, df)
+    ax.legend(fontsize=8, ncol=4, loc="best")
+
+    fig.tight_layout()
+
+    if save:
+        fig.savefig(save, dpi=110)
 
 def trajectory_plot(df, save=None):
     """
@@ -429,6 +452,7 @@ if __name__ == "__main__":
     attitude_plot(df, t_takeover, save=out("attitude"))
     ctrl_freq_plot(df, mask, target_hz=args.target_hz, save=out("ctrlfreq"))
     rc_plot(df, t_takeover, save=out("rc"))
+    # servo_plot(df, t_takeover, save=out("servo"))
     trajectory_plot(df, save=out("trajectory"))
     trajectory_plot_3d(df, save=out("trajectory_3d"))
 
