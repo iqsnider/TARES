@@ -19,6 +19,7 @@ class SafeTrajectory:
             self.logger.note_sent(mode=m.flightmode)
         else:
             self.logger = logger
+            self.logger.note_sent(mode=m.flightmode)
 
         # check if start condition request is for current position and find initial position
         if startFromCurrentPosition:

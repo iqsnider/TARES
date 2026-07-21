@@ -1,10 +1,13 @@
 # mission control imports
 import comms.common as comms
-import comms.control as control
+from comms.control import ControlComms
 
 # autonomy research imports
 import sim.trajectory as mission
 import sim.SITL_dynamics as dynamics
+
+# logging
+from logs.flight import FlightLogger
 
 
 if __name__ == '__main__':
@@ -14,6 +17,8 @@ if __name__ == '__main__':
     takeoff_altitude = 15
     control_freq = 50
     speed = 2
+
+
 
     # add baud here if connected to real drone
     m = comms.connect(connection)
@@ -33,19 +38,25 @@ if __name__ == '__main__':
     # CLEAR THE AREA
     comms.takeoff(m, takeoff_altitude)
 
-    # prepare datastream for high rate control requests
-    control.request_fast_state(m, hz=control_freq)
 
-    # ------- initialize autonomy -------
+    # intialize the logs
+    logger = FlightLogger()
+
+    # initalize control communications and prepare datastream for high rate control requests
+    controlLink = ControlComms(m,
+                               control_frequency=control_freq,
+                               logger=logger, 
+                               rec=False) 
 
     # 5 m test
     startPointHoverTime = 5
     endPointHoverTime = 5
-    ref = mission.SafeTrajectory(m, None, [5, 0, 0], speed=speed,
+    ref = mission.SafeTrajectory(m, None, [50, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,
                                  startFromCurrentPosition=True,
-                                 relativeEnd=True).drone_trajectory()
+                                 relativeEnd=True,
+                                 logger=logger).drone_trajectory()
 
 
 
@@ -56,5 +67,10 @@ if __name__ == '__main__':
     # define outer-loop control law
     controller = dynamics.OuterLoopLQR()
 
-    control.fly_trajectory(
-        m, ref, controller, duration=ref.duration, dt=1/control_freq, yaw_lock=True, reassert=True)
+    controlLink.fly_drone_trajectory(ref, 
+                               controller, 
+                               duration=ref.duration,
+                               yaw_lock=True, 
+                               reassert=True)
+    # close the logger
+    logger.close()

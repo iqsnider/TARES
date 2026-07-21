@@ -2,6 +2,9 @@ from pymavlink import mavutil
 from collections import Counter
 import time
 
+
+
+
 def connect(connection, baud=None):
     print(f"connecting to {connection}")
     # setup listener on the specified port
@@ -11,11 +14,6 @@ def connect(connection, baud=None):
         the_connection = mavutil.mavlink_connection(connection)
 
     the_connection.wait_heartbeat()
-
-    # # stream telemetry at stream rate
-    # the_connection.mav.request_data_stream_send(the_connection.target_system,
-    #                                             the_connection.target_component,
-    #                                             mavutil.mavlink.MAV_DATA_STREAM_ALL, datastream, 1)
 
     print(f"connected to {connection}")
 
