@@ -26,7 +26,7 @@ if __name__ == '__main__':
     # check for armability
     comms.wait_until_armable(m)
 
-    # tell ardupilot not to help the external control system
+    # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
     comms.set_guid_options(m, 48)
 
     # GUIDED mode is easiest for external commands
