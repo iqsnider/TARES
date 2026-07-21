@@ -115,7 +115,6 @@ def fly_trajectory(m, ref, controller, duration, dt, yaw_lock=True, reassert=Fal
         logger.pump(m)
         x = get_state_enu(logger.cache['ned'], prev=None)
         if time.time() > t_wait:
-            print("Here 2")
             raise RuntimeError("no LOCAL_POSITION_NED within 5s")
         time.sleep(0.01)
 

@@ -12,7 +12,7 @@ class SafeTrajectory:
     ENU
     Generates and maintains information for a usable/safe reference trajectory for hardware and SITL runs.
     """
-    def __init__(self, m, p_start, p_end, speed, startPointHoverTime=1, endPointHoverTime=1, startFromCurrentPosition=True, logger=None):
+    def __init__(self, m, p_start, p_end, speed, startPointHoverTime=1, endPointHoverTime=1, startFromCurrentPosition=True, relativeEnd=True, logger=None):
         # initialization
         if logger == None:
             self.logger = FlightLogger()
@@ -24,14 +24,16 @@ class SafeTrajectory:
         if startFromCurrentPosition:
             print("Starting from current position, initializing trajectory...")
             # block for the first real state
-            p0 = None
+            x0 = None
             t_wait = time.time() + 5
-            while p0 is None:
+            while x0 is None:
                 self.logger.pump(m)
-                self.p0 = get_state_enu(self.logger.cache['ned'], prev=None)
+                x0 = get_state_enu(self.logger.cache['ned'], prev=None)
                 if time.time() > t_wait:
                     raise RuntimeError("no LOCAL_POSITION_NED within 5s")
                 time.sleep(0.01)
+
+            self.p0 = x0[:3]
 
         # if not start from current position, evaluate safety of requested starting position
         else:
@@ -44,19 +46,31 @@ class SafeTrajectory:
             if safety == False:
                 raise RuntimeError("Unsafe starting conditions, aborting autonomy test")
 
-        # initialize mission variables
-        self.p1 = p_end
+        # check if we also want the end relative to wherever we started
+        if relativeEnd:
+            self.p1 = self.p0 + p_end
+        else:
+            self.p1 = p_end
+
+        # initialize mission parameters
         self.speed = speed
         self.startPointHoverTime = startPointHoverTime
         self.endPointHoverTime = endPointHoverTime
 
+
     def drone_trajectory(self):
+        """
+        Computes the reference trajectory object for only the drone
+        """
         reference_trajectory_obj = drone_only_mission.ReferenceTrajectory(self.p0, self.p1, self.speed,
                                                                            self.startPointHoverTime, self.endPointHoverTime)
         return reference_trajectory_obj
 
 
     def payload_trajectory(self):
+        """
+        Computes the reference trajectory object for the payload
+        """
         # TODO: implement this section when payload reference trajectory is ready
         raise NotImplementedError("Payload trajectory generation will be added soon")
 
@@ -79,12 +93,11 @@ class SafeTrajectory:
             logger.pump(m)
             current_position = get_state_enu(logger.cache['ned'], prev=None)
             if time.time() > t_wait:
-                print("Here 1")
                 raise RuntimeError("no LOCAL_POSITION_NED within 5s")
             time.sleep(0.01)
 
         # evaluate difference between p_start and current_position
-        delta = np.linalg.norm(p_start - p_end)
+        delta = np.linalg.norm(p_start - current_position)
 
         # unsafe position notification
         if delta > safe_starting_delta:

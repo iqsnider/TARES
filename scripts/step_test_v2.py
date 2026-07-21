@@ -1,4 +1,3 @@
-
 # mission control imports
 import comms.common as comms
 import comms.control as control
@@ -14,7 +13,7 @@ if __name__ == '__main__':
     connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 15
     control_freq = 50
-    speed = 0.5
+    speed = 2
 
     # add baud here if connected to real drone
     m = comms.connect(connection)
@@ -42,9 +41,11 @@ if __name__ == '__main__':
     # 5 m test
     startPointHoverTime = 5
     endPointHoverTime = 5
-    ref = mission.SafeTrajectory(m, [0, 0, 15], [5, 0, 15], speed=speed,
-                                      startPointHoverTime=startPointHoverTime,
-                                      endPointHoverTime=endPointHoverTime).drone_trajectory()
+    ref = mission.SafeTrajectory(m, None, [5, 0, 0], speed=speed,
+                                 startPointHoverTime=startPointHoverTime,
+                                 endPointHoverTime=endPointHoverTime,
+                                 startFromCurrentPosition=True,
+                                 relativeEnd=True).drone_trajectory()
 
 
 

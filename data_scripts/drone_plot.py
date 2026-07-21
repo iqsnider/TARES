@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
+import glob
+import re
 
+LOG_RE = re.compile(r"^flight_\d{8}_\d{6}\.csv$")
+DATA_DIR = "~/TARES_SITL/data"
+
+LOG_GLOB = "flight_*.csv"
 G = 9.80665
 MG_TO_MS2 = G/1000
 
@@ -373,16 +379,33 @@ def trajectory_plot_3d(df, save=None):
     if save:
         fig.savefig(save, dpi=110)
 
+def latest_log(data_dir=DATA_DIR):
+    """Return the newest flight_YYYYMMDD_HHMMSS.csv in data_dir (excludes sidecars)."""
+    d = os.path.expanduser(data_dir)
+    files = [os.path.join(d, f) for f in os.listdir(d) if LOG_RE.match(f)]
+    if not files:
+        raise FileNotFoundError(f"no flight_YYYYMMDD_HHMMSS.csv files in {d}")
+    return max(files)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Post-flight analysis plots.")
-    ap.add_argument("csv", nargs="?",
-                    default="~/TARES_SITL/data/data_07152026/flight_20260715_133242.csv")
+    ap.add_argument("csv", nargs="?", default=None)
+    ap.add_argument("--latest", action="store_true",
+                    help=f"use the newest {LOG_GLOB} in --data-dir")
+    ap.add_argument("--data-dir", default=DATA_DIR,
+                    help="directory searched by --latest")
     ap.add_argument("--target-hz", type=float, default=50,
                     help="expected control frequency for the reference line")
     ap.add_argument("--outdir", default=None,
                     help="if set, save PNGs here instead of (only) showing")
     args = ap.parse_args()
+
+    if args.latest or args.csv is None:
+        args.csv = latest_log(args.data_dir)
+        print(f"Using latest log: {args.csv}")
+    elif args.latest and args.csv:
+        ap.error("pass either a csv path or --latest, not both")
+
 
     df = make_df(args.csv)
     t_takeover, mask = guided_window(df)
