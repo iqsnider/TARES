@@ -188,7 +188,7 @@ class FlightLogger:
                     [f"{time.time():.4f}", c["fc_time_boot_ms"], msg.severity, msg.text])
                 self.ef.flush()
 
-    def log(self, t, x, p_ref, v_ref, u, *,
+    def log(self, t, x, p_ref=(NAN,)*3, v_ref=(NAN,)*3, u=(NAN,)*3, *,
             yaw_ref=0, yaw_rate_ref=0,
             payload_p_ref=None, payload_v_ref=None,
             payload_alpha=None, payload_alphadot=None):
