@@ -227,6 +227,8 @@ def attitude_plot(df, t_takeover, save=None):
     ax.plot(t, np.degrees(df["drone_roll"]),  label="roll")
     ax.plot(t, np.degrees(df["drone_pitch"]), label="pitch")
     ax.plot(t, np.degrees(df["drone_yaw"]),   label="yaw")
+    last_line_color = plt.gca().get_lines()[-1].get_color()
+    ax.plot(t, np.degrees(df["yaw_ref"]), color=last_line_color, linestyle="--",  label="yaw_ref")
 
     ax.set_xlabel("Time [s]"); ax.set_ylabel("Angle [deg]")
 
