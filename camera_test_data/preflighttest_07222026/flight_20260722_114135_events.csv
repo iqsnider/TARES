@@ -1,0 +1,10 @@
+wall_time,fc_time_boot_ms,severity,text
+1784745695.9712,nan,6,AHRS: EKF3 active
+1784745695.9713,nan,6,EKF3 IMU0 tilt alignment complete
+1784745695.9713,nan,6,EKF3 IMU0 MAG0 initial yaw alignment complete
+1784745695.9714,nan,6,EKF3 IMU2 tilt alignment complete
+1784745695.9714,nan,6,EKF3 IMU1 tilt alignment complete
+1784745695.9714,nan,6,EKF3 IMU1 MAG0 initial yaw alignment complete
+1784745695.9715,nan,6,EKF3 IMU2 MAG0 initial yaw alignment complete
+1784745695.9715,nan,4,ODID: lost transmitter
+1784745697.9981,nan,4,ODID: lost transmitter

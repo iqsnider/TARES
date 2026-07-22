@@ -10,28 +10,28 @@ import time
 from logs.flight import FlightLogger
 
 if __name__ == "__main__":
-    connection = "/dev/ttyACM0"
-    baud = 115200
-    # connection = "udp:127.0.0.1:14550"
+    # connection = "/dev/ttyACM0"
+    # baud = 115200
+    connection = "udp:127.0.0.1:14550"
     control_freq = 50
 
-    i = 0
     # add baud here if connected to real drone
-    m = comms.connect(connection, baud)
+    m = comms.connect(connection)
 
     # initialize drone logger
-    logger = FlightLogger(data_dir="camera_test_data")
+    data_dir = "camera_test_data/preflighttest_07222026"
+    logger = FlightLogger(data_dir=f"{data_dir}")
 
     # intializing the contorl object will get the fast state for the logger
     controlLink = ControlComms(m, control_frequency=control_freq,logger=logger,rec=True)
 
     # begin payload recording
-    video_out_data = f"recording_170mm_test2_iteration_{i}.avi"
-    poses_out_data = f"poses_170mm_test2_iteration_{i}.csv"
+    video_out_data = f"{data_dir}/recording_170mm_test.avi"
+    poses_out_data = f"{data_dir}/poses_170mm_test.csv"
     rec = MarkerPoseRecorder(marker_size_m=0.17,
                              video_out=video_out_data,
                              csv_out=poses_out_data,
-                             fps=60,
+                             fps=48,
                              flight_logger=logger)
     try:
         rec.run(mav=m)

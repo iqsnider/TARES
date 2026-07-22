@@ -2,21 +2,132 @@ import cv2
 import csv
 import json
 import time
+import queue
+import signal
+import threading
 import numpy as np
 
 import os
 
 NAN = float("nan")
 
+
+class _FrameGrabber(threading.Thread):
+    """Continuously pull frames off the camera in the background.
+
+    Keeps only the most recent frame (drop-freshest). For tracking you want
+    the latest frame, not a backlog, so if the main loop falls behind, stale
+    frames are discarded rather than queued. read() blocks until a frame newer
+    than the caller's last sequence number is available, or the camera stops.
+    """
+
+    def __init__(self, cap):
+        super().__init__(daemon=True)
+        self.cap = cap
+        self._cond = threading.Condition()
+        self._frame = None
+        self._seq = 0
+        self._stopped = False
+
+    def run(self):
+        fails = 0
+        try:
+            while True:
+                # MJPG devices occasionally hand back an empty buffer, which
+                # makes OpenCV's JPEG decode raise instead of returning False.
+                # Treat that as a dropped frame, not a fatal error.
+                try:
+                    ok, frame = self.cap.read()
+                except cv2.error:
+                    ok, frame = False, None
+                if not ok or frame is None or frame.size == 0:
+                    fails += 1
+                    if fails > 50:                # sustained failure = real stop
+                        break
+                    time.sleep(0.005)
+                    continue
+                fails = 0
+                with self._cond:
+                    if self._stopped:
+                        break
+                    self._frame = frame
+                    self._seq += 1
+                    self._cond.notify_all()
+        finally:
+            with self._cond:
+                self._stopped = True
+                self._cond.notify_all()
+
+    def read(self, last_seq):
+        """Return (frame, seq) once a frame newer than last_seq exists.
+
+        Returns (None, last_seq) if the camera has stopped and nothing newer
+        is available.
+        """
+        with self._cond:
+            while self._seq == last_seq and not self._stopped:
+                self._cond.wait()
+            if self._seq == last_seq:            # stopped, no new frame
+                return None, last_seq
+            return self._frame, self._seq
+
+    def stop(self):
+        with self._cond:
+            self._stopped = True
+            self._cond.notify_all()
+
+
+class _AsyncWriter(threading.Thread):
+    """Encode + write video frames on a background thread.
+
+    Blocking put with a bounded queue applies backpressure so the recorded
+    video stays 1:1 with the CSV rows (no silent frame drops) while still
+    letting MJPG encode overlap detection. If the writer itself errors, it
+    switches to draining-and-dropping so the main loop can never deadlock.
+    """
+
+    def __init__(self, writer, maxsize=16):
+        super().__init__(daemon=True)
+        self.writer = writer
+        self.q = queue.Queue(maxsize=maxsize)
+        self._stop = object()
+        self.failed = False
+        self.max_depth = 0
+
+    def run(self):
+        while True:
+            item = self.q.get()
+            if item is self._stop:
+                break
+            try:
+                self.writer.write(item)
+            except Exception as e:                # noqa: BLE001
+                if not self.failed:
+                    print(f"video writer failed, dropping frames: {e}")
+                self.failed = True
+
+    def submit(self, frame):
+        if self.failed:
+            return
+        self.max_depth = max(self.max_depth, self.q.qsize())
+        self.q.put(frame)                         # blocking = backpressure
+
+    def close(self):
+        self.q.put(self._stop)
+        self.join()
+
+
 class MarkerPoseRecorder:
     def __init__(self,
                  calibration_path="~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json",
-                 marker_size_m=0.14,
+                 marker_size_m=0.17,
                  video_out="recording.avi",
                  csv_out="poses.csv",
-                 fps=60,
+                 fps=48,
                  aruco_dict=cv2.aruco.DICT_4X4_250,
-                 flight_logger=None):
+                 flight_logger=None,
+                 print_every=30,
+                 write_queue_size=16):
         # logging
         self.flight_logger = flight_logger
         self.mav = None
@@ -25,6 +136,8 @@ class MarkerPoseRecorder:
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
         self.fps = fps
+        self.print_every = print_every            # 0 = silent per-frame
+        self.write_queue_size = write_queue_size
 
         # load camera parameters
         with open(os.path.expanduser(calibration_path)) as f:
@@ -56,6 +169,11 @@ class MarkerPoseRecorder:
         self.frame_idx = 0
         self._t0 = None
 
+        # threading handles
+        self._grabber = None
+        self._awriter = None
+        self._stop_requested = False
+
     def get_marker_poses(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
@@ -76,9 +194,27 @@ class MarkerPoseRecorder:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.calib_w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.calib_h)
 
-        ok, frame = self.cap.read()
-        if not ok:
-            raise RuntimeError("could not read from camera")
+        # Warm-up: an MJPG V4L2 device often isn't streaming valid frames for
+        # the first tens of ms after set(), so the first read can come back
+        # empty and OpenCV raises (-215 !buf.empty in imdecode). Retry briefly
+        # instead of treating one empty buffer as fatal.
+        frame = None
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            try:
+                ok, f = self.cap.read()
+            except cv2.error:
+                ok, f = False, None
+            if ok and f is not None and f.size > 0:
+                frame = f
+                break
+            time.sleep(0.05)
+        if frame is None:
+            self.cap.release()
+            self.cap = None
+            raise RuntimeError(
+                "camera did not produce a valid frame during warm-up "
+                "(check it isn't held by another process)")
         h, w = frame.shape[:2]
         print(f"requested {self.calib_w}x{self.calib_h}, got {w}x{h}")
         assert abs(w - self.calib_w) < 0.1 * self.calib_w, \
@@ -87,6 +223,8 @@ class MarkerPoseRecorder:
         self.writer = cv2.VideoWriter(
             self.video_out, cv2.VideoWriter_fourcc(*"MJPG"),
             self.fps, (w, h))
+        self._awriter = _AsyncWriter(self.writer, maxsize=self.write_queue_size)
+        self._awriter.start()
 
         self.csv_file = open(self.csv_out, "w", newline="")
         self.csv_writer = csv.writer(self.csv_file)
@@ -101,9 +239,11 @@ class MarkerPoseRecorder:
     def process_frame(self, frame):
         """Detect markers, annotate the frame, write video + CSV rows.
 
-        Returns the poses dict for this frame.
+        Returns the poses dict for this frame. Video encode is offloaded to a
+        background thread; everything else runs here so flight timestamps and
+        pose stay on one clock.
         """
-        # if logging drone data
+        # if logging drone data (kept on the main thread for timestamp alignment)
         if self.flight_logger is not None and self.mav is not None:
             self.flight_logger.pump(self.mav)
             n, e, d, vn, ve, vd = self.flight_logger.cache["ned"]
@@ -123,6 +263,7 @@ class MarkerPoseRecorder:
                 c = marker_corners[0].mean(axis=0)   # mean of 4 corners -> (u, v)
                 centers[int(marker_id)] = c
 
+        verbose = self.print_every and (self.frame_idx % self.print_every == 0)
         t = time.time() - self._t0
         if poses:
             for marker_id, (rvec, tvec) in poses.items():
@@ -131,8 +272,9 @@ class MarkerPoseRecorder:
                 rx, ry, rz = rvec.flatten()
                 x, y, z = tvec.flatten()
                 dist_m = float(np.linalg.norm(tvec))
-                print(f"id {marker_id}: x={x:+.3f} y={y:+.3f} z={z:+.3f} m  "
-                      f"range={dist_m:.3f} m")
+                if verbose:
+                    print(f"id {marker_id}: x={x:+.3f} y={y:+.3f} z={z:+.3f} m  "
+                          f"range={dist_m:.3f} m")
                 u, v = centers[marker_id]
                 self.csv_writer.writerow([self.frame_idx, f"{t:.4f}", marker_id,
                                           f"{rx:.6f}", f"{ry:.6f}", f"{rz:.6f}",
@@ -140,41 +282,91 @@ class MarkerPoseRecorder:
                                           f"{u:.2f}", f"{v:.2f}"])
         else:
             nan = float("nan")
-            print("no marker detected")
+            if verbose:
+                print("no marker detected")
             self.csv_writer.writerow(
                 [self.frame_idx, f"{t:.4f}", nan,
                  nan, nan, nan, nan, nan, nan, nan, nan, nan])
 
-        self.writer.write(frame)
+        self._awriter.submit(frame)
         self.frame_idx += 1
         return poses
 
     def run(self, camera_index=0, mav=None):
         """Open everything and record until Ctrl+C or camera failure."""
         self.mav = mav
+        self._stop_requested = False
 
-        self.open(camera_index)
-        print("recording... press Ctrl+C to stop")
+        def _on_sigint(signum, frame):
+            # Flip a flag and wake the grabber so the main loop exits cleanly
+            # and close() flushes exactly once -- even on repeated Ctrl+C.
+            self._stop_requested = True
+            if self._grabber is not None:
+                self._grabber.stop()
+
         try:
-            while True:
-                ok, frame = self.cap.read()
-                if not ok:
+            prev_handler = signal.getsignal(signal.SIGINT)
+        except (ValueError, TypeError):
+            prev_handler = None
+
+        seq = 0
+        try:
+            self.open(camera_index)
+            self._grabber = _FrameGrabber(self.cap)
+            self._grabber.start()
+            try:
+                signal.signal(signal.SIGINT, _on_sigint)
+            except (ValueError, RuntimeError):
+                pass                             # not on main thread -> KeyboardInterrupt path
+            print("recording... press Ctrl+C to stop")
+            while not self._stop_requested:
+                frame, seq = self._grabber.read(seq)
+                if frame is None:                # camera stopped
                     break
                 self.process_frame(frame)
         except KeyboardInterrupt:
             pass
         finally:
-            self.close()
+            try:
+                self.close()
+            finally:
+                if prev_handler is not None:
+                    try:
+                        signal.signal(signal.SIGINT, prev_handler)
+                    except (ValueError, RuntimeError):
+                        pass
 
     def close(self):
+        # stop pulling new frames first, then drain what's already queued
+        if self._grabber is not None:
+            self._grabber.stop()
+            self._grabber.join(timeout=1.0)
+            self._grabber = None
+        if self._awriter is not None:
+            self._awriter.close()               # flushes queued frames
+            if self._awriter.max_depth >= self.write_queue_size - 1:
+                print("warning: video write queue saturated -- encode is a "
+                      "bottleneck; lower resolution or raise write_queue_size")
+            self._awriter = None
         if self.cap is not None:
             self.cap.release()
+            self.cap = None
         if self.writer is not None:
             self.writer.release()
+            self.writer = None
         if self.csv_file is not None:
             self.csv_file.close()
-        print(f"saved {self.frame_idx} frames to {self.video_out} "
-              f"and poses to {self.csv_out}")
+            self.csv_file = None
+
+        if self._t0 is not None and self.frame_idx > 0:
+            elapsed = time.time() - self._t0
+            achieved = self.frame_idx / elapsed if elapsed > 0 else 0.0
+            print(f"saved {self.frame_idx} frames to {self.video_out} "
+                  f"and poses to {self.csv_out}")
+            print(f"achieved {achieved:.1f} fps "
+                  f"(video header says {self.fps} fps -- "
+                  f"playback speed is only correct if these match; "
+                  f"CSV time_s is the ground truth)")
 
     # context-manager support
     def __enter__(self):

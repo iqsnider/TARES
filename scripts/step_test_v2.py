@@ -11,15 +11,15 @@ from logs.flight import FlightLogger
 
 
 if __name__ == '__main__':
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 15
     control_freq = 50
-    speed = 2
+    speed = 0.5
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # check for armability
     comms.wait_until_armable(m)
@@ -47,8 +47,8 @@ if __name__ == '__main__':
                                rec=False) 
 
     # mission reference
-    startPointHoverTime = 5
-    endPointHoverTime = 5
+    startPointHoverTime = 10
+    endPointHoverTime = 10
 
     # ENU to ENU
     ref = mission.SafeTrajectory(m, None, [10, 0, 0], speed=speed,
