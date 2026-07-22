@@ -75,9 +75,9 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None, fps=48,
 
 
 if __name__ == '__main__':
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
     takeoff_altitude = 15
     control_freq = 50
     speed = 0.5
@@ -104,10 +104,10 @@ if __name__ == '__main__':
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    comms.arm(m)
+    # comms.arm(m)
 
     # CLEAR THE AREA
-    comms.takeoff(m, takeoff_altitude)
+    # comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger()
@@ -152,7 +152,7 @@ if __name__ == '__main__':
                                          controller,
                                          duration=ref.duration,
                                          yaw_lock=True,
-                                         reassert=True)
+                                         reassert=False)
     finally:
         # stop the camera first so it flushes its video + pose CSV,
         # then close the flight logger

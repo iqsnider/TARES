@@ -10,9 +10,9 @@ import time
 from logs.flight import FlightLogger
 
 if __name__ == "__main__":
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
     control_freq = 50
 
     # live view config
@@ -20,10 +20,10 @@ if __name__ == "__main__":
     track_marker_ids = [219, 220, 221]   # only log these ids; None = all
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # initialize drone logger
-    data_dir = "camera_test_data/preflighttest_07222026"
+    data_dir = "camera_test_data/flighttest_07232026"
     logger = FlightLogger(data_dir=f"{data_dir}")
 
     # intializing the contorl object will get the fast state for the logger
