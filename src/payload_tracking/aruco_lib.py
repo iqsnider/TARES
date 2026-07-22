@@ -90,14 +90,14 @@ class _AsyncWriter(threading.Thread):
         super().__init__(daemon=True)
         self.writer = writer
         self.q = queue.Queue(maxsize=maxsize)
-        self._stop = object()
-        self.failed = False
+        self._sentinel = object()             # unique stop token (NOT _stop:
+        self.failed = False                   # that name is Thread._stop())
         self.max_depth = 0
 
     def run(self):
         while True:
             item = self.q.get()
-            if item is self._stop:
+            if item is self._sentinel:
                 break
             try:
                 self.writer.write(item)
@@ -113,18 +113,19 @@ class _AsyncWriter(threading.Thread):
         self.q.put(frame)                         # blocking = backpressure
 
     def close(self):
-        self.q.put(self._stop)
+        self.q.put(self._sentinel)
         self.join()
 
 
 class MarkerPoseRecorder:
     def __init__(self,
                  calibration_path="~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json",
-                 marker_size_m=0.17,
+                 marker_size_m=0.14,
                  video_out="recording.avi",
                  csv_out="poses.csv",
-                 fps=48,
+                 fps=60,
                  aruco_dict=cv2.aruco.DICT_4X4_250,
+                 marker_ids=None,
                  flight_logger=None,
                  print_every=30,
                  write_queue_size=16):
@@ -133,6 +134,8 @@ class MarkerPoseRecorder:
         self.mav = None
 
         self.marker_size_m = marker_size_m
+        # markers to track; None -> accept every detected id, otherwise only these
+        self.marker_ids = None if marker_ids is None else {int(i) for i in marker_ids}
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
         self.fps = fps
@@ -178,14 +181,26 @@ class MarkerPoseRecorder:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
         poses = {}
+        kept_corners = []
+        kept_ids = []
         if ids is not None:
             for marker_corners, marker_id in zip(corners, ids.flatten()):
+                mid = int(marker_id)
+                # drop anything not on the whitelist (marker_ids=None -> keep all)
+                if self.marker_ids is not None and mid not in self.marker_ids:
+                    continue
+                kept_corners.append(marker_corners)
+                kept_ids.append(mid)
                 ok, rvec, tvec = cv2.solvePnP(
                     self.obj_points, marker_corners[0], self.mtx, self.dist,
                     flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if ok:
-                    poses[int(marker_id)] = (rvec, tvec)
-        return corners, ids, poses
+                    poses[mid] = (rvec, tvec)
+        # return only the kept markers so drawing, centers, and CSV see the
+        # tracked set and nothing else
+        if kept_ids:
+            return kept_corners, np.array(kept_ids, dtype=np.int32).reshape(-1, 1), poses
+        return (), None, poses
 
     def open(self, camera_index=0):
         """Open the camera and the output video/CSV files."""
@@ -335,6 +350,17 @@ class MarkerPoseRecorder:
                         signal.signal(signal.SIGINT, prev_handler)
                     except (ValueError, RuntimeError):
                         pass
+
+    def stop(self):
+        """Request the run() loop to exit. Safe to call from another thread.
+
+        Sets the stop flag and wakes the grabber so a blocked read() returns;
+        run()'s finally then flushes video/CSV via close(). Idempotent, and a
+        no-op if called before run() has started the grabber.
+        """
+        self._stop_requested = True
+        if self._grabber is not None:
+            self._grabber.stop()
 
     def close(self):
         # stop pulling new frames first, then drain what's already queued
