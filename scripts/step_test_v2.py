@@ -18,8 +18,6 @@ if __name__ == '__main__':
     control_freq = 50
     speed = 2
 
-
-
     # add baud here if connected to real drone
     m = comms.connect(connection)
 
@@ -48,9 +46,11 @@ if __name__ == '__main__':
                                logger=logger, 
                                rec=False) 
 
-    # 5 m test
+    # mission reference
     startPointHoverTime = 5
     endPointHoverTime = 5
+
+    # ENU to ENU
     ref = mission.SafeTrajectory(m, None, [10, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,

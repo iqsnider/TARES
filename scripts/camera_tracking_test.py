@@ -3,7 +3,7 @@ from pymavlink import mavutil
 from payload_tracking.aruco_lib import MarkerPoseRecorder
 
 import comms.common as comms
-import comms.control as control
+from comms.control import ControlComms
 
 import time
 
@@ -18,10 +18,12 @@ if __name__ == "__main__":
     i = 0
     # add baud here if connected to real drone
     m = comms.connect(connection, baud)
-    control.request_fast_state(m, hz=control_freq)
 
     # initialize drone logger
     logger = FlightLogger(data_dir="camera_test_data")
+
+    # intializing the contorl object will get the fast state for the logger
+    controlLink = ControlComms(m, control_frequency=control_freq,logger=logger,rec=True)
 
     # begin payload recording
     video_out_data = f"recording_170mm_test2_iteration_{i}.avi"
