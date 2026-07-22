@@ -15,6 +15,10 @@ if __name__ == "__main__":
     connection = "udp:127.0.0.1:14550"
     control_freq = 50
 
+    # live view config
+    preview_port = 8080                  # MJPEG live view; set None to disable
+    track_marker_ids = [219, 220, 221]   # only log these ids; None = all
+
     # add baud here if connected to real drone
     m = comms.connect(connection)
 
@@ -23,7 +27,7 @@ if __name__ == "__main__":
     logger = FlightLogger(data_dir=f"{data_dir}")
 
     # intializing the contorl object will get the fast state for the logger
-    controlLink = ControlComms(m, control_frequency=control_freq,logger=logger,rec=True)
+    controlLink = ControlComms(m, control_frequency=control_freq, logger=logger, rec=True)
 
     # begin payload recording
     video_out_data = f"{data_dir}/recording_170mm_test.avi"
@@ -32,7 +36,9 @@ if __name__ == "__main__":
                              video_out=video_out_data,
                              csv_out=poses_out_data,
                              fps=48,
-                             flight_logger=logger)
+                             marker_ids=track_marker_ids,
+                             flight_logger=logger,
+                             preview_port=preview_port)
     try:
         rec.run(mav=m)
     finally:

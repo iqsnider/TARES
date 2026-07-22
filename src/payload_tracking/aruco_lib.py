@@ -5,6 +5,7 @@ import time
 import queue
 import signal
 import threading
+import http.server
 import numpy as np
 
 import os
@@ -117,6 +118,122 @@ class _AsyncWriter(threading.Thread):
         self.join()
 
 
+class _MJPEGPreview:
+    """Serve the latest annotated frame as an MJPEG-over-HTTP stream.
+
+    The camera can be opened by only one process, so a second VideoCapture on
+    the same device would fail -- instead the recorder tees each annotated
+    frame here via update(). A background encoder thread downscales and
+    JPEG-encodes at a capped fps, so the recording loop only pays a cheap
+    reference store and the preview never competes for CPU or saturates the
+    link. View at http://<host>:<port>/ in a browser or VLC. To avoid exposing
+    a port on the router, forward it over the existing SSH session:
+        ssh -L <port>:localhost:<port> user@co-computer
+    then open http://localhost:<port>/ on the laptop.
+    """
+
+    def __init__(self, port=8080, host="0.0.0.0",
+                 max_width=960, fps=12, quality=60):
+        self.port = int(port)
+        self.host = host
+        self.max_width = int(max_width)
+        self.interval = 1.0 / fps if fps and fps > 0 else 0.0
+        self.quality = int(quality)
+        self._raw_lock = threading.Lock()
+        self._raw = None
+        self._jpeg_lock = threading.Lock()
+        self._jpeg = None
+        self._stopped = False
+        self._encoder = threading.Thread(target=self._encode_loop, daemon=True)
+        self._httpd = None
+        self._http_thread = None
+
+    def start(self):
+        handler = self._make_handler()
+        self._httpd = http.server.ThreadingHTTPServer((self.host, self.port), handler)
+        self._httpd.daemon_threads = True
+        self._http_thread = threading.Thread(
+            target=self._httpd.serve_forever, daemon=True)
+        self._encoder.start()
+        self._http_thread.start()
+        return self
+
+    def update(self, frame):
+        # hot-loop safe: just stash the latest reference; encode happens elsewhere
+        with self._raw_lock:
+            self._raw = frame
+
+    def _encode_loop(self):
+        while not self._stopped:
+            t0 = time.time()
+            with self._raw_lock:
+                frame = self._raw
+            if frame is not None:
+                img = frame
+                h, w = img.shape[:2]
+                if w > self.max_width:
+                    s = self.max_width / float(w)
+                    img = cv2.resize(img, (self.max_width, int(round(h * s))))
+                ok, buf = cv2.imencode(
+                    ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), self.quality])
+                if ok:
+                    with self._jpeg_lock:
+                        self._jpeg = buf.tobytes()
+            rem = self.interval - (time.time() - t0)
+            if rem > 0:
+                time.sleep(rem)
+
+    def _make_handler(self):
+        preview = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass  # silence per-request console spam
+
+            def do_GET(self):
+                if self.path not in ("/", "/stream", "/stream.mjpg"):
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Pragma", "no-cache")
+                self.send_header(
+                    "Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
+                self.end_headers()
+                try:
+                    while not preview._stopped:
+                        with preview._jpeg_lock:
+                            jpg = preview._jpeg
+                        if jpg is None:
+                            time.sleep(0.05)
+                            continue
+                        self.wfile.write(b"--FRAME\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(
+                            ("Content-Length: %d\r\n\r\n" % len(jpg)).encode())
+                        self.wfile.write(jpg)
+                        self.wfile.write(b"\r\n")
+                        if preview.interval > 0:
+                            time.sleep(preview.interval)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # client closed the tab -- not an error
+
+        return Handler
+
+    def stop(self):
+        self._stopped = True
+        if self._httpd is not None:
+            try:
+                self._httpd.shutdown()
+                self._httpd.server_close()
+            except Exception:
+                pass
+        if self._http_thread is not None:
+            self._http_thread.join(timeout=1.0)
+        if self._encoder.is_alive():
+            self._encoder.join(timeout=1.0)
+
+
 class MarkerPoseRecorder:
     def __init__(self,
                  calibration_path="~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json",
@@ -128,7 +245,11 @@ class MarkerPoseRecorder:
                  marker_ids=None,
                  flight_logger=None,
                  print_every=30,
-                 write_queue_size=16):
+                 write_queue_size=16,
+                 preview_port=None,
+                 preview_fps=12,
+                 preview_width=960,
+                 preview_quality=60):
         # logging
         self.flight_logger = flight_logger
         self.mav = None
@@ -141,6 +262,13 @@ class MarkerPoseRecorder:
         self.fps = fps
         self.print_every = print_every            # 0 = silent per-frame
         self.write_queue_size = write_queue_size
+
+        # live preview (MJPEG-over-HTTP); preview_port=None disables it
+        self.preview_port = preview_port
+        self.preview_fps = preview_fps
+        self.preview_width = preview_width
+        self.preview_quality = preview_quality
+        self._preview = None
 
         # load camera parameters
         with open(os.path.expanduser(calibration_path)) as f:
@@ -241,6 +369,15 @@ class MarkerPoseRecorder:
         self._awriter = _AsyncWriter(self.writer, maxsize=self.write_queue_size)
         self._awriter.start()
 
+        if self.preview_port is not None:
+            self._preview = _MJPEGPreview(
+                port=self.preview_port, max_width=self.preview_width,
+                fps=self.preview_fps, quality=self.preview_quality)
+            self._preview.start()
+            print(f"live preview: http://<co-computer-ip>:{self.preview_port}/  "
+                  f"(or  ssh -L {self.preview_port}:localhost:{self.preview_port} "
+                  f"user@co-computer  then http://localhost:{self.preview_port}/)")
+
         self.csv_file = open(self.csv_out, "w", newline="")
         self.csv_writer = csv.writer(self.csv_file)
         self.csv_writer.writerow(["frame", "time_s", "marker_id",
@@ -303,6 +440,8 @@ class MarkerPoseRecorder:
                 [self.frame_idx, f"{t:.4f}", nan,
                  nan, nan, nan, nan, nan, nan, nan, nan, nan])
 
+        if self._preview is not None:
+            self._preview.update(frame)      # before submit: stays live under writer backpressure
         self._awriter.submit(frame)
         self.frame_idx += 1
         return poses
@@ -368,6 +507,9 @@ class MarkerPoseRecorder:
             self._grabber.stop()
             self._grabber.join(timeout=1.0)
             self._grabber = None
+        if self._preview is not None:
+            self._preview.stop()
+            self._preview = None
         if self._awriter is not None:
             self._awriter.close()               # flushes queued frames
             if self._awriter.max_depth >= self.write_queue_size - 1:

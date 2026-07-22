@@ -19,12 +19,16 @@ from datetime import datetime
 
 
 def start_camera(marker_size_m, video_out, csv_out, marker_ids=None, fps=48,
-                 camera_index=0, ready_timeout=5.0):
+                 camera_index=0, ready_timeout=5.0, preview_port=None):
     """Launch the ArUco pose recorder on a background thread.
 
     marker_ids: iterable of ints to track exclusively, or None for all. When
     set, only those IDs are pose-solved, drawn, and written to the CSV --
     spurious detections of other IDs are dropped before they reach the data.
+
+    preview_port: if set, serve a downscaled MJPEG live view on that port (view
+    in a browser, ideally tunneled over SSH: ssh -L PORT:localhost:PORT ...).
+    None disables it.
 
     The recorder writes ONLY to its own video + pose CSV. It is created with
     flight_logger=None and run with mav=None, so it never touches the flight
@@ -45,7 +49,8 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None, fps=48,
         fps=fps,
         marker_ids=marker_ids,       # track only these IDs (None = all)
         flight_logger=None,          # no flight-logger integration (by design)
-        print_every=0)               # silent per-frame; close() still prints fps
+        print_every=0,               # silent per-frame; close() still prints fps
+        preview_port=preview_port)   # None = no live view
 
     thread = threading.Thread(
         target=recorder.run,
@@ -80,6 +85,7 @@ if __name__ == '__main__':
     # marker / camera-output config
     marker_size_m = 0.17
     track_marker_ids = [219, 220, 221]   # only these are logged; others dropped
+    preview_port =  None                 # live MJPEG view; None to disable
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"camera_test_data/step_test_with_camera_{stamp}"
     video_out = f"{data_dir}/recording.avi"
@@ -136,6 +142,7 @@ if __name__ == '__main__':
         video_out=video_out,
         csv_out=poses_out,
         marker_ids=track_marker_ids,
+        preview_port=preview_port,
         fps=48)
 
     # run autonomy
