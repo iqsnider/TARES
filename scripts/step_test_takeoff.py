@@ -51,7 +51,7 @@ if __name__ == '__main__':
     endPointHoverTime = 10
 
     # ENU to ENU
-    ref = mission.SafeTrajectory(m, None, [10, 0, 0], speed=speed,
+    ref = mission.SafeTrajectory(m, None, [-10, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,
                                  startFromCurrentPosition=True,

@@ -16,14 +16,14 @@ if __name__ == "__main__":
     control_freq = 50
 
     # live view config
-    preview_port = 8080                  # MJPEG live view; set None to disable
-    track_marker_ids = [219, 220, 221]   # only log these ids; None = all
+    preview_port = 8080 # MJPEG live view; set None to disable
+    track_marker_ids = [232, 245, 233]   # only log these ids; None = all
 
     # add baud here if connected to real drone
     m = comms.connect(connection, baud)
 
     # initialize drone logger
-    data_dir = "camera_test_data/flighttest_07232026"
+    data_dir = "camera_test_data/flighttest_07232026_test3"
     logger = FlightLogger(data_dir=f"{data_dir}")
 
     # intializing the contorl object will get the fast state for the logger
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     rec = MarkerPoseRecorder(marker_size_m=0.17,
                              video_out=video_out_data,
                              csv_out=poses_out_data,
-                             fps=48,
+                             fps=30,
                              marker_ids=track_marker_ids,
                              flight_logger=logger,
                              preview_port=preview_port)

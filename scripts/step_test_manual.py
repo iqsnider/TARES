@@ -14,7 +14,6 @@ if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
     # connection = "udp:127.0.0.1:14550"
-    takeoff_altitude = 15
     control_freq = 50
     speed = 0.5
 
@@ -51,7 +50,7 @@ if __name__ == '__main__':
     endPointHoverTime = 10
 
     # ENU to ENU
-    ref = mission.SafeTrajectory(m, None, [10, 0, 0], speed=speed,
+    ref = mission.SafeTrajectory(m, None, [-10, 0, 0], speed=speed,
                                  startPointHoverTime=startPointHoverTime,
                                  endPointHoverTime=endPointHoverTime,
                                  startFromCurrentPosition=True,
