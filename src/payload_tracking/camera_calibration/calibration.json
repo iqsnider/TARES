@@ -1,6 +1,6 @@
 {
-    "sensor": "AR0821_onsemi",
-    "lens": "See3CAM_CU81_M12_DFOV120",
+    "sensor": "sensor",
+    "lens": "cam",
     "mtx": [
         [
             1387.764642550637,

@@ -1,141 +1,113 @@
-import argparse
 import os
 import numpy as np
 import pandas as pd
-import matplotlib
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-# stable color per marker id
-MARKER_COLORS = {231: "#4c72b0", 232: "#dd8452",
-                 233: "#55a868", 234: "#c44e52", 235: "#8172b3",
-                 230: "#937860"}
+from estimation.calculate_payload_position import get_payload_ENU_from_data
 
+G = 9.80665
+MG_TO_MS2 = G/1000
 
-def load_poses(path):
-    p = pd.read_csv(os.path.expanduser(path))
-    p = p.dropna(subset=["marker_id", "x", "y", "z"]).copy()
-    p["marker_id"] = p["marker_id"].astype(int)
-    return p
+CMD_TO_ENU = {"East (x)": ("ux", "aE"),
+              "North (y)": ("uy", "aN"),
+              "Up (z)": ("uz", "aU")}
 
 
-def load_flight(path):
-    return pd.read_csv(os.path.expanduser(path)) if path else None
+MODE_SHADING = {
+    "GUIDED": ("#4c72b0", 0.10), # faint blue
+    "STABILIZE": ("0.5", 0.12),  # faint gray
+    "LOITER": ("#55a868", 0.14), # faint green
+}
+
+def make_df(path):
+    return pd.read_csv(os.path.expanduser(path))
 
 
-# ---------- 1. per-marker XY trajectory (camera frame) ----------
-def marker_xy_plot(poses, save=None):
-    fig, ax = plt.subplots(figsize=(8, 7))
-    for mid, g in poses.groupby("marker_id"):
-        g = g.sort_values("time_s")
-        c = MARKER_COLORS.get(int(mid), None)
-        ax.plot(g.x, g.y, "-", lw=0.8, alpha=0.5, color=c)
-        ax.scatter(g.x, g.y, s=8, color=c, label=f"id {int(mid)} (n={len(g)})")
-    ax.set_xlabel("x [m] (camera frame)")
-    ax.set_ylabel("y [m] (camera frame)")
-    ax.set_title("Per-marker XY trajectory (camera frame)")
-    ax.axis("equal")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    if save:
-        fig.savefig(save, dpi=110)
+
+def _set_equal_3d(ax, X, Y, Z):
+    """Equal data aspect for a 3D axes (matplotlib has no axis('equal') in 3D)."""
+    xr, yr, zr = np.ptp(X), np.ptp(Y), np.ptp(Z)
+    r = max(xr, yr, zr) / 2 or 1.0
+    cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
+    ax.set_xlim(cx-r, cx+r); ax.set_ylim(cy-r, cy+r); ax.set_zlim(cz-r, cz+r)
+    try:
+        ax.set_box_aspect((1, 1, 1))
+    except Exception:
+        pass
 
 
-# ---------- payload center + camera->ENU registration ----------
-def payload_center_enu(poses, flight):
+def _mode_runs(df):
     """
-    One payload point per camera frame (centroid of visible markers), registered
-    into the drone's ENU frame by timestamp.
-
-    >>> FRAME ASSUMPTIONS (edit here) <<<
-    - Camera rigidly mounted on the drone, pointing straight down (nadir).
-    - OpenCV optical frame: +z forward (down) => world U offset = -z.
-    - Horizontal (x,y) placed WITHOUT yaw/mounting correction (baseline).
-      Vertical is reliable; horizontal E/N may need a yaw rotation + axis/sign
-      fix once the camera clocking is known.
+    Yield (start_idx, end_idx_inclusive, mode) for contiguous echoed_mode runs
     """
-    per_frame = (poses.groupby("frame")
-                 .agg(time_s=("time_s", "mean"),
-                      x=("x", "mean"), y=("y", "mean"), z=("z", "mean"),
-                      n=("marker_id", "size"))
-                 .reset_index()
-                 .sort_values("time_s"))
+    em = df["echoed_mode"].astype(str).to_numpy()
+    n = len(em)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and em[j + 1] == em[i]:
+            j += 1
+        yield i, j, em[i]
+        i = j + 1
 
-    fl = flight.sort_values("cur_time")
-    merged = pd.merge_asof(per_frame, fl[["cur_time", "drone_px_meas",
-                                          "drone_py_meas", "drone_pz_meas",
-                                          "drone_yaw"]],
-                           left_on="time_s", right_on="cur_time",
-                           direction="nearest")
+def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
+    """
+    3D East-North-Up trajectory of the drone and its slung payload, colored by
+    flight mode, with the reference trajectory overlaid. Gaps where the markers
+    were not detected are left as breaks in the payload line.
+    """
+    E = df["drone_px_meas"].to_numpy()
+    N = df["drone_py_meas"].to_numpy()
+    U = df["drone_pz_meas"].to_numpy()
 
-    # --- editable transform block ---
-    merged["payload_E"] = merged.drone_px_meas + merged.x
-    merged["payload_N"] = merged.drone_py_meas + merged.y
-    merged["payload_U"] = merged.drone_pz_meas - merged.z
-    return merged
+    pE = payload_df["payload_e"].to_numpy()
+    pN = payload_df["payload_n"].to_numpy()
+    pU = payload_df["payload_u"].to_numpy()
 
-
-# ---------- 2. drone + payload XYZ trajectory ----------
-def drone_payload_xyz_plot(poses, flight, save=None):
-    m = payload_center_enu(poses, flight)
-    fl = flight
-    fig = plt.figure(figsize=(9, 8))
+    fig = plt.figure(figsize=(8.5, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    ax.plot(fl.drone_px_meas, fl.drone_py_meas, fl.drone_pz_meas,
-            color="#4c72b0", lw=1.5, label="drone (ENU)")
-    ax.scatter(fl.drone_px_meas.iloc[0], fl.drone_py_meas.iloc[0],
-               fl.drone_pz_meas.iloc[0], color="#4c72b0", s=40)
+    seen = set()
+    for i, j, mode in _mode_runs(df):
+        color = MODE_SHADING.get(mode, ("0.7", 0))[0]     # neutral gray if unknown
+        sl = slice(i, min(j + 2, len(df)))                # +1 pt to connect segments
+        lbl = f"drone ({mode})" if mode not in seen else None
+        ax.plot(E[sl], N[sl], U[sl], color=color, lw=1.8, label=lbl)
+        seen.add(mode)
 
-    ax.plot(m.payload_E, m.payload_N, m.payload_U,
-            color="#c44e52", lw=1.0, alpha=0.8, label="payload (centroid)")
+    if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(df.columns):
+        ax.plot(df["drone_px_ref"], df["drone_py_ref"], df["drone_pz_ref"],
+                "k--", lw=1.5, label="reference")
 
-    # faint vertical tether lines every ~2 s to show hang geometry
-    step = max(1, len(m) // 40)
-    for _, r in m.iloc[::step].iterrows():
-        di = (fl.cur_time - r.time_s).abs().idxmin()
-        ax.plot([fl.drone_px_meas[di], r.payload_E],
-                [fl.drone_py_meas[di], r.payload_N],
-                [fl.drone_pz_meas[di], r.payload_U],
-                color="0.6", lw=0.4, alpha=0.4)
+    # tether lines first so the payload trace draws on top of them
+    finite = np.flatnonzero(np.isfinite(pE))
+    if tether_every and finite.size:
+        for k in finite[::tether_every]:
+            ax.plot([E[k], pE[k]], [N[k], pN[k]], [U[k], pU[k]],
+                    color="0.6", lw=0.6, alpha=0.7)
 
-    ax.set_xlabel("E [m]"); ax.set_ylabel("N [m]"); ax.set_zlabel("U [m]")
-    ax.set_title("Drone + payload trajectory (ENU)\n"
-                 "payload horizontal = uncorrected for yaw/camera clocking")
-    ax.legend(fontsize=8)
+    ax.plot(pE, pN, pU, color="tab:orange", lw=1.2, label="payload")
+
+    ax.scatter([E[0]], [N[0]], [U[0]], c="red", s=45, label="start")
+    ax.scatter([0], [0], [0], c="black", marker="x", s=70, label="local origin")
+
+    ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.set_zlabel("Up [m]")
+    ax.set_title("3D trajectory (ENU), drone and payload")
+    _set_equal_3d(ax,
+                  np.concatenate([E, pE[finite], [0]]),
+                  np.concatenate([N, pN[finite], [0]]),
+                  np.concatenate([U, pU[finite], [0]]))
+    ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     if save:
         fig.savefig(save, dpi=110)
 
-
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Payload pose analysis plots.")
-    ap.add_argument("poses", nargs="?",
-                    default="~/TARES_SITL/poses_170mm_test2_iteration_0.csv")
-    ap.add_argument("--flight", default="~/TARES_SITL/camera_test_data/flight_20260715_151404.csv",
-                    help="flight CSV for the drone trajectory (graph 2)")
-    ap.add_argument("--outdir", default=None)
-    args = ap.parse_args()
+    payload_pose_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/step_test_with_camera_20260723_114555/poses.csv"
+    flight_data_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/flight_20260723_114556.csv"
 
-    poses = load_poses(args.poses)
-    flight = load_flight(args.flight)
+    payload_df = get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=1)
+    drone_df = pd.read_csv(flight_data_file)
 
-    ids = sorted(poses.marker_id.unique())
-    print(f"marker ids present: {[int(i) for i in ids]}  "
-          f"({len(ids)} of 5 expected)")
-
-    def out(name):
-        if args.outdir:
-            base = os.path.splitext(os.path.basename(args.poses))[0]
-            return os.path.join(os.path.expanduser(args.outdir), f"{base}_{name}.png")
-        return None
-
-    marker_xy_plot(poses, save=out("marker_xy"))
-    if flight is not None:
-        drone_payload_xyz_plot(poses, flight, save=out("drone_payload_xyz"))
-    else:
-        print("no --flight given; skipping drone+payload XYZ plot")
-
-    if not args.outdir:
-        plt.show()
+    trajectory_plot_3d_with_payload(drone_df, payload_df)
+    plt.show()
