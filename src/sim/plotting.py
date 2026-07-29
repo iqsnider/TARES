@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import matplotlib as mpl
@@ -23,7 +24,8 @@ C_REF = '#9AA0A6'      # reference / set-point traces
 C_DRONE = '#0077BB'    # drone path
 C_PAYLOAD = '#EE7733'  # payload path
 C_HOVER = '#CC3311'    # hover-thrust marker
-GRID_GREY = '#D5D8DC'
+GRID_GREY = '#C9C4B4'
+PARCHMENT = '#f4f1ea'  # figure / axes background
 
 
 def configure_plot_style(use_tex=False):
@@ -75,18 +77,18 @@ def configure_plot_style(use_tex=False):
         # --- legend ---
         'legend.frameon': True,
         'legend.framealpha': 0.92,
-        'legend.edgecolor': '#D5D8DC',
-        'legend.facecolor': 'white',
+        'legend.edgecolor': '#C9C4B4',
+        'legend.facecolor': PARCHMENT,
         'legend.fancybox': True,
         'legend.borderpad': 0.5,
         'legend.handlelength': 1.8,
         # --- figure / export ---
-        'figure.facecolor': 'white',
-        'axes.facecolor': 'white',
+        'figure.facecolor': PARCHMENT,
+        'axes.facecolor': PARCHMENT,
         'figure.dpi': 120,
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
-        'savefig.facecolor': 'white',
+        'savefig.facecolor': PARCHMENT,
     }
 
     if use_tex:
@@ -125,15 +127,40 @@ def _save(fig, fname, save_dir=FIG_DIR, formats=('png',), dpi=300):
 
 
 # ----------------------------------------------------------------------------
+# Reference target
+# ----------------------------------------------------------------------------
+# A run's reference trajectory is drawn for one body or the other: the payload
+# (swing-aware control) or the drone (swing-blind control). run_sim.py records
+# which in the results file, and every figure takes it as `ref_target` so the
+# reference curve and the tracking-error panels name the right body.
+REF_BODY = {'payload': 'Payload', 'drone': 'Drone'}
+
+
+def _body_name(ref_target):
+    """Display name for the body a reference trajectory was drawn for."""
+    try:
+        return REF_BODY[ref_target]
+    except KeyError:
+        raise ValueError(f'ref_target must be one of {tuple(REF_BODY)}, '
+                         f'got {ref_target!r}')
+
+
+# ----------------------------------------------------------------------------
 # 3-D trajectory
 # ----------------------------------------------------------------------------
 def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
                        title='Trajectory',
-                       save_dir=None, fname='trajectory_3d'):
+                       save_dir=None, fname='trajectory_3d',
+                       ref_target='payload'):
+    """3-D drone/payload paths against the reference `P_ref`.
+
+    `ref_target` says which body P_ref was drawn for ('payload' or 'drone').
+    """
     drone = X[:, 0:3]
     sax, say = np.sin(X[:, 12]), np.sin(X[:, 13])
     cax, cay = np.cos(X[:, 12]), np.cos(X[:, 13])
-    payload = drone + TETHER_LEN * np.column_stack([sax, say, -cax * cay])
+    payload = drone + TETHER_LEN * \
+        np.column_stack([sax * cay, say, -cax * cay])
 
     fig = plt.figure(figsize=(11, 9), constrained_layout=True)
     ax = fig.add_subplot(projection='3d')
@@ -141,7 +168,7 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
         fig.suptitle(title, fontsize=18, fontweight='bold')
 
     ax.plot(*P_ref.T, color=C_REF, linewidth=1.6, linestyle=(0, (5, 4)),
-            label='Payload reference')
+            label=f'{_body_name(ref_target)} reference')
     ax.plot(*drone.T, color=C_DRONE, linewidth=2.0, label='Drone')
     ax.plot(*payload.T, color=C_PAYLOAD, linewidth=2.0, label='Payload')
 
@@ -170,8 +197,8 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
     # softer panes + grid for a cleaner 3-D look
     ax.view_init(elev=22, azim=-58)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        axis.pane.set_facecolor((0.985, 0.985, 0.985, 1.0))
-        axis.pane.set_edgecolor((0.85, 0.85, 0.85, 1.0))
+        axis.pane.set_facecolor(PARCHMENT)
+        axis.pane.set_edgecolor(GRID_GREY)
         axis.pane.set_alpha(1.0)
         try:  # private API, guard across mpl versions
             axis._axinfo['grid'].update(color=GRID_GREY, linewidth=0.6)
@@ -202,44 +229,47 @@ def _fmt(ax, ylabel, title, legend_loc='upper right', zeroline=True):
     ax.margins(x=0.01)
 
 
-# --- individual panel drawers: each renders one subplot onto `ax` -----------
-def _p_position(ax, t, Xe, U):
+# --- individual panel drawers ------------------------------------------------
+# Each renders one subplot onto `ax`. `body` names the body the reference was
+# drawn for ('Payload' or 'Drone'); only the tracking-error panels use it, but
+# every drawer takes it so `_assemble` can call them all the same way.
+def _p_position(ax, t, Xe, U, body):
     for i, lbl in enumerate(['$x$ [m]', '$y$ [m]', '$z$ [m]']):
         ax.plot(t, Xe[i], label=lbl, color=COLORS[i])
-    _fmt(ax, 'Position error [m]', 'Payload Position Error')
+    _fmt(ax, 'Position error [m]', f'{body} Position Error')
 
 
-def _p_velocity(ax, t, Xe, U):
+def _p_velocity(ax, t, Xe, U, body):
     for i, lbl in enumerate([r'$v_x$ [m/s]', r'$v_y$ [m/s]', r'$v_z$ [m/s]']):
         ax.plot(t, Xe[3 + i], label=lbl, color=COLORS[i])
-    _fmt(ax, 'Velocity error [m/s]', 'Payload Velocity Error')
+    _fmt(ax, 'Velocity error [m/s]', f'{body} Velocity Error')
 
 
-def _p_orientation(ax, t, Xe, U):
+def _p_orientation(ax, t, Xe, U, body):
     for i, lbl in enumerate(['roll [deg]', 'pitch [deg]', 'yaw [deg]']):
         ax.plot(t, np.rad2deg(Xe[6 + i]), label=lbl, color=COLORS[i])
     _fmt(ax, 'Angle error [deg]', 'Drone Orientation Error')
 
 
-def _p_angrate(ax, t, Xe, U):
+def _p_angrate(ax, t, Xe, U, body):
     for i, lbl in enumerate(['$p$ [deg/s]', '$q$ [deg/s]', '$r$ [deg/s]']):
         ax.plot(t, np.rad2deg(Xe[9 + i]), label=lbl, color=COLORS[i])
     _fmt(ax, 'Rate error [deg/s]', 'Drone Angular Velocity Error')
 
 
-def _p_payload_angle(ax, t, Xe, U):
+def _p_payload_angle(ax, t, Xe, U, body):
     for i, lbl in enumerate([r'$\alpha_x$ [deg]', r'$\alpha_y$ [deg]']):
         ax.plot(t, np.rad2deg(Xe[12 + i]), label=lbl, color=COLORS[i])
     _fmt(ax, 'Pendulum angle [deg]', 'Payload Angle')
 
 
-def _p_payload_rate(ax, t, Xe, U):
+def _p_payload_rate(ax, t, Xe, U, body):
     for i, lbl in enumerate([r'$\dot\alpha_x$ [deg/s]', r'$\dot\alpha_y$ [deg/s]']):
         ax.plot(t, np.rad2deg(Xe[14 + i]), label=lbl, color=COLORS[i])
     _fmt(ax, 'Pendulum rate [deg/s]', 'Payload Angle Rate')
 
 
-def _p_thrust(ax, t, Xe, U):
+def _p_thrust(ax, t, Xe, U, body):
     ax.plot(t, U[0], label=r'$C_\Sigma$ [N]', color=COLORS[0])
     ax.axhline(HOVER_THRUST, color=C_HOVER, linewidth=1.2,
                linestyle=(0, (1, 2)), label='Hover thrust', zorder=1)
@@ -247,7 +277,7 @@ def _p_thrust(ax, t, Xe, U):
     _fmt(ax, 'Thrust [N]', 'Control Thrust', zeroline=False)
 
 
-def _p_torques(ax, t, Xe, U):
+def _p_torques(ax, t, Xe, U, body):
     for i, lbl in enumerate([r'$\tau_x$ [N$\cdot$m]', r'$\tau_y$ [N$\cdot$m]',
                              r'$\tau_z$ [N$\cdot$m]']):
         ax.plot(t, U[1 + i], label=lbl, color=COLORS[i])
@@ -260,13 +290,12 @@ _PAYLOAD_CONTROL_PANELS = [_p_payload_angle,
                            _p_payload_rate, _p_thrust, _p_torques]
 _ALL_PANELS = _STATE_PANELS + _PAYLOAD_CONTROL_PANELS
 
-
-def _assemble(panels, nrows, ncols, t, Xe, U, suptitle, figsize):
+def _assemble(panels, nrows, ncols, t, Xe, U, suptitle, figsize, body):
     fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
                              constrained_layout=True)
     axes = np.atleast_2d(axes)
     for panel, ax in zip(panels, axes.ravel()):
-        panel(ax, t, Xe, U)
+        panel(ax, t, Xe, U, body)
     for ax in axes[-1, :]:          # only the bottom row carries the x-label
         ax.set_xlabel('Time [s]')
     if suptitle:
@@ -275,13 +304,16 @@ def _assemble(panels, nrows, ncols, t, Xe, U, suptitle, figsize):
 
 
 def state_control_grid(t, X_err, U_pert, title='Nonlinear Model',
-                       save_dir=None, fname='state_control'):
+                       save_dir=None, fname='state_control',
+                       ref_target='payload'):
     """Single 4x2 sheet with all eight state/control panels.
 
-    X_err   error-state time history (16 x N)
-    U_pert  LQR perturbation control (4 x N: thrust + 3 torques)
+    X_err       error-state time history (16 x N)
+    U_pert      LQR perturbation control (4 x N: thrust + 3 torques)
+    ref_target  body rows 0:6 of X_err were scored against
     """
-    fig = _assemble(_ALL_PANELS, 4, 2, t, X_err, U_pert, title, (16, 20))
+    fig = _assemble(_ALL_PANELS, 4, 2, t, X_err, U_pert, title, (16, 20),
+                    _body_name(ref_target))
     if save_dir:
         _save(fig, fname, save_dir)
     return fig
@@ -294,16 +326,18 @@ _state_control_plots = state_control_grid
 def state_control_panels(t, X_err, U_pert, title='Nonlinear Model',
                          sections=(None, None),
                          save_dir=None,
-                         fnames=('state_errors', 'payload_control')):
+                         fnames=('state_errors', 'payload_control'),
+                         ref_target='payload'):
     """Two 2x2 panels."""
     sep = ' '
     sup_top = f'{title}{sep}{sections[0]}' if sections[0] else title
     sup_bot = f'{title}{sep}{sections[1]}' if sections[1] else title
+    body = _body_name(ref_target)
 
     fig_top = _assemble(_STATE_PANELS, 2, 2, t, X_err,
-                        U_pert, sup_top, (14, 9))
+                        U_pert, sup_top, (14, 9), body)
     fig_bot = _assemble(_PAYLOAD_CONTROL_PANELS, 2, 2, t, X_err, U_pert,
-                        sup_bot, (14, 9))
+                        sup_bot, (14, 9), body)
 
     if save_dir:
         _save(fig_top, fnames[0], save_dir)
@@ -314,15 +348,16 @@ def state_control_panels(t, X_err, U_pert, title='Nonlinear Model',
 def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
              traj_title='Trajectory',
              save_dir=FIG_DIR, layout='panels', n_tethers=25, fnames=None,
-             verbose=False):
+             verbose=False, ref_target='payload'):
     """Generate every figure and write it to ``save_dir`` (default ``figs/``).
 
     layout : 'panels' (two 2x2, default), 'grid' (one 4x2), or 'both'.
+    ref_target : body the reference was drawn for, 'payload' or 'drone'.
     Returns a dict mapping a short key to each Figure.
     """
     figs = {'trajectory': plot_trajectory_3d(
         ts, X, P_ref, n_tethers=n_tethers, title=traj_title,
-        save_dir=save_dir, fname='trajectory_3d')}
+        save_dir=save_dir, fname='trajectory_3d', ref_target=ref_target)}
 
     if verbose:
         title += (
@@ -336,14 +371,62 @@ def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
     if layout in ('panels', 'both'):
         if fnames is not None:
             top, bot = state_control_panels(t, X_err, U_pert, title=title,
-                                            save_dir=save_dir, fnames=fnames)
+                                            save_dir=save_dir, fnames=fnames,
+                                            ref_target=ref_target)
         else:
             top, bot = state_control_panels(t, X_err, U_pert, title=title,
-                                            save_dir=save_dir)
+                                            save_dir=save_dir,
+                                            ref_target=ref_target)
 
         figs['state_errors'] = top
         figs['payload_control'] = bot
     if layout in ('grid', 'both'):
         figs['state_control'] = state_control_grid(
-            t, X_err, U_pert, title=title, save_dir=save_dir)
+            t, X_err, U_pert, title=title, save_dir=save_dir,
+            ref_target=ref_target)
     return figs
+
+
+# ----------------------------------------------------------------------------
+# Command line entry point: plot a run written by sim.simulation.run_sim
+# ----------------------------------------------------------------------------
+def main():
+    from sim.simulation.sim_io import DEFAULT_RESULTS, load_results
+
+    ap = argparse.ArgumentParser(
+        description='Plot a simulation run saved by run_sim.py')
+    ap.add_argument('results', nargs='?', default=DEFAULT_RESULTS,
+                    help='.npz written by run_sim.py')
+    ap.add_argument('--save-dir', default=FIG_DIR, help='figure output folder')
+    ap.add_argument('--layout', default='panels',
+                    choices=('panels', 'grid', 'both'))
+    ap.add_argument('--no-show', dest='show', action='store_false',
+                    help='just write the files, do not open a window')
+    ap.add_argument('--ref-for', dest='ref_target', default=None,
+                    choices=sorted(REF_BODY),
+                    help='override the reference target stored in the results')
+    args = ap.parse_args()
+
+    run = load_results(args.results)
+    ref_target = args.ref_target or run['ref_target']
+    title = f"Nonlinear Model - {run['arch']}" if run['arch'] \
+        else 'Nonlinear Model'
+    title += f" ({_body_name(ref_target).lower()} reference)"
+
+    save_all(ts=run['ts'], X=run['X'], P_ref=run['P_ref'],
+             t=run['ts'], X_err=run['err_log'], U_pert=run['u_log'],
+             title=title, traj_title='Drone and Payload Trajectory',
+             save_dir=args.save_dir, layout=args.layout, verbose=True,
+             ref_target=ref_target)
+    print(f'figures written to {args.save_dir}/')
+
+    if args.show:
+        if mpl.get_backend().lower() == 'agg':
+            print('plotting: non-interactive Agg backend, no window to open '
+                  '(figures are still saved).')
+        else:
+            plt.show()   # blocks so the 3-D view stays pannable
+
+
+if __name__ == '__main__':
+    main()

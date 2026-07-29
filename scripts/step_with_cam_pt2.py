@@ -20,26 +20,6 @@ from datetime import datetime
 
 def start_camera(marker_size_m, video_out, csv_out, marker_ids=None, fps=48,
                  camera_index=0, ready_timeout=5.0, preview_port=None):
-    """Launch the ArUco pose recorder on a background thread.
-
-    marker_ids: iterable of ints to track exclusively, or None for all. When
-    set, only those IDs are pose-solved, drawn, and written to the CSV --
-    spurious detections of other IDs are dropped before they reach the data.
-
-    preview_port: if set, serve a downscaled MJPEG live view on that port (view
-    in a browser, ideally tunneled over SSH: ssh -L PORT:localhost:PORT ...).
-    None disables it.
-
-    The recorder writes ONLY to its own video + pose CSV. It is created with
-    flight_logger=None and run with mav=None, so it never touches the flight
-    logger or the mav link -- it shares no state with the control loop and
-    runs fully independently. Per-frame prints are silenced (print_every=0) so
-    the console stays focused on control diagnostics during the flight.
-
-    Returns (recorder, thread). If the camera fails to come up within
-    ready_timeout, prints a warning and returns anyway so the mission can
-    still proceed; the caller decides whether to continue.
-    """
     os.makedirs(os.path.dirname(video_out) or ".", exist_ok=True)
 
     recorder = MarkerPoseRecorder(

@@ -24,7 +24,11 @@ TETHER_LEN = 8 # [m]
 
 
 ##### totals #####
-MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD + MASS_TETHER
+# the tether hangs off the drone, so its mass rides with the payload in the
+# lumped pendulum model. keeps the plant mass equal to MASS_TOTAL, which is
+# what the controllers assume for hover thrust.
+MASS_PAYLOAD_EFF = MASS_PAYLOAD + MASS_TETHER
+MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 
 ##### camera tracking parameters #####

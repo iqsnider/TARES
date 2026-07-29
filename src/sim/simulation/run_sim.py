@@ -1,88 +1,140 @@
-import numpy as np
+"""
+uv run run_sim.py
+uv run run_sim.py --arch drone_pd --ref-for drone
+
+The reference trajectory can be drawn for either body: --ref-for payload
+(default) puts the payload on the curve, --ref-for drone puts the drone on
+it and lets the payload swing where it likes. The choice is recorded in the
+results file so the plots label and score the right body.
+
+Writes the run to out/sim_results.npz. Plot it with:
+
+uv run plotting.py out/sim_results.npz
+"""
+
+import argparse
 import math
 
+import numpy as np
+from scipy.integrate import solve_ivp
+
+from model import nonlinear_ode, payload_state
 import sim.config as config
+import sim.drone_test_only_mission_manager as mission
+from sim.simulation import control_law
+from sim.simulation.sim_io import DEFAULT_RESULTS, save_results
 
-def nonlinear_ode(x, u):
+
+REF_TARGETS = ('payload', 'drone')
+
+
+class _OffsetReference:
+    """A reference shifted by a constant position offset."""
+
+    def __init__(self, ref, offset):
+        self._ref = ref
+        self._offset = np.asarray(offset, dtype=float)
+        self.duration = ref.duration
+
+    def __call__(self, t):
+        p, v = self._ref(t)
+        return p + self._offset, v
+
+
+def as_payload_reference(ref, ref_target):
+    """The payload reference the control stack tracks.
+
+    Every architecture in control_law.py consumes a payload reference, so a
+    trajectory drawn for the drone is dropped one tether length to give the
+    payload curve that hangs the drone on the caller's original path.
     """
-    16 state nonlinear drone with taut tether-suspended payload system
+    if ref_target == 'drone':
+        return _OffsetReference(ref, [0.0, 0.0, -config.TETHER_LEN])
+    return ref
+
+
+def initial_state(pl_ref):
+    """Drone hovering at rest with the payload hanging on the t=0 reference."""
+    x0 = np.zeros(16)
+    p_pl0, _ = pl_ref(0.0)
+    x0[0:3] = p_pl0 + np.array([0.0, 0.0, config.TETHER_LEN])
+    return x0
+
+
+def simulate(architecture, ref, dt=0.02, ref_target='payload'):
+    """Integrate the closed loop while tracking `ref`.
+
+    `ref_target` names the body `ref` was drawn for ('payload' or 'drone');
+    the returned P_ref and error rows 0:6 are reported against that body.
+
+    Returns ts, X, P_ref, err_log (16 x N), u_log (4 x N).
     """
-    mD = config.MASS_DRONE
-    mP = config.MASS_PAYLOAD
-    g = config.GRAVITY
-    L = config.TETHER_LEN
-    J = config.J
+    if ref_target not in REF_TARGETS:
+        raise ValueError(f'ref_target must be one of {REF_TARGETS}')
 
-    Jxx, Jyy, Jzz = J[0, 0], J[1, 1], J[2, 2]
+    pl_ref = as_payload_reference(ref, ref_target)
+    t_end = ref.duration
+    t_eval = np.arange(0, t_end, dt)
 
-    phi, theta, psi = x[6], x[7], x[8]
-    p, q, r = x[9], x[10], x[11]
-    alx, aly = x[12], x[13]
-    alx_d, aly_d = x[14], x[15]
+    def ode(t, x):
+        return nonlinear_ode(x, architecture(x, t, pl_ref)[0])
 
-    C_Sigma, n1, n2, n3 = u
+    sol = solve_ivp(ode, [0.0, t_end], initial_state(pl_ref),
+                    t_eval=t_eval, method='RK45')
 
-    sp, cp = math.sin(phi), math.cos(phi)
-    st, ct = math.sin(theta), math.cos(theta)
-    sy, cy = math.sin(psi), math.cos(psi)
+    X = sol.y.T
+    P_ref = np.array([ref(t)[0] for t in sol.t])
+    p_PL, v_PL = payload_state(X)
+    # the body the reference was drawn for is the one we score against
+    p_tgt, v_tgt = ((X[:, 0:3], X[:, 3:6]) if ref_target == 'drone'
+                    else (p_PL, v_PL))
 
-    sax, cax = math.sin(alx), math.cos(alx)
-    say, cay = math.sin(aly), math.cos(aly)
+    err_log = np.zeros((16, len(sol.t)))
+    u_log = np.zeros((4, len(sol.t)))
 
-    T_EB = np.array([[ct*cy, sp*st*cy - cp*sy, cp*st*cy + sp*sy],
-                     [ct*sy, sp*st*sy + cp*cy, cp*st*sy - sp*cy],
-                     [-st,   sp*ct,            cp*ct]])
+    for i, t in enumerate(sol.t):
+        u_log[:, i], err_log[:, i] = architecture(X[i], t, pl_ref)
+        err_log[0:3, i] = p_tgt[i] - P_ref[i]
+        err_log[3:6, i] = v_tgt[i] - ref(t)[1]
 
-    F_thrust_W = T_EB @ np.array([0, 0, C_Sigma])
+    return sol.t, X, P_ref, err_log, u_log
 
-    # payload position relative to drone
-    r_rel = L*np.array([sax*cay,
-                        say,
-                        -cax * cay])
 
-    n_hat = r_rel / L
-    ndot_sq = cay**2 * alx_d**2 + aly_d**2
-    T = (mP/(mD + mP))*(mD*L*ndot_sq - n_hat@F_thrust_W)
-    # tension along the cable, drone toward load
-    F_cable_W = T*n_hat
 
-    # translational acceleration
-    ddx = C_Sigma/mD * (cy*st*cp + sy*sp) + F_cable_W[0]/mD
-    ddy = C_Sigma/mD * (sy*st*cp - cy*sp) + F_cable_W[1]/mD
-    ddz = C_Sigma/mD * (ct*cp) - g + F_cable_W[2]/mD
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
 
-    # euler rates
-    tt = st / ct
-    phi_dot = p + (sp*q + cp*r)*tt
-    theta_dot = cp*q - sp*r
-    psi_dot = (sp*q + cp*r)/ct
+    ap.add_argument('--arch', default=control_law.DEFAULT_ARCHITECTURE,
+                    choices=sorted(control_law.ARCHITECTURES),
+                    help='control architecture from control_law.py')
 
-    # body angular velocities
-    p_dot = (n1 - (Jyy - Jzz)*q*r) / Jxx
-    q_dot = (n2 - (Jzz - Jxx)*p*r) / Jyy
-    r_dot = (n3 - (Jxx - Jyy)*p*q) / Jzz
+    ap.add_argument('--ref-for', default='payload', choices=REF_TARGETS,
+                    dest='ref_target',
+                    help='which body the reference trajectory is drawn for')
 
-    Ftx, Fty, Ftz = F_thrust_W
+    ap.add_argument('-o', '--out', default=DEFAULT_RESULTS,
+                    help='output .npz path')
 
-    alpha_x_ddot = (-(cax*Ftx + sax*Ftz) / (mD*L*cay)
-                    + 2*(say/cay)*alx_d*aly_d)
+    args = ap.parse_args()
 
-    alpha_y_ddot = (-(cay*Fty + say*(cax*Ftz - sax*Ftx)) / (mD*L)
-                    - say*cay*alx_d**2)
-    # output xdot
-    return np.array([x[3], x[4], x[5],
-                     ddx, ddy, ddz,
+    startPointHoverTime = 5
+    endPointHoverTime = 5 
+    architecture = control_law.build(args.arch)
 
-                     phi_dot,
-                     theta_dot,
-                     psi_dot,
+    ref = mission.ReferenceTrajectory(p_start=np.array([0, 0, 15]),
+                                      p_end=np.array([0, -10, 15]),
+                                      speed=1,
+                                      startPointHoverTime=startPointHoverTime,
+                                      endPointHoverTime=endPointHoverTime)
 
-                     p_dot,
-                     q_dot,
-                     r_dot,
+    ts, X, P_ref, err_log, u_log = simulate(architecture, ref,
+                                            ref_target=args.ref_target)
 
-                     alx_d,
-                     aly_d,
+    path = save_results(args.out, ts, X, P_ref, err_log, u_log, arch=args.arch,
+                        ref_target=args.ref_target)
+    print(f'{args.arch} ({args.ref_target} reference): {len(ts)} samples '
+          f'over {ts[-1]:.1f} s -> {path}')
 
-                     alpha_x_ddot,
-                     alpha_y_ddot])
+
+if __name__ == '__main__':
+    main()
