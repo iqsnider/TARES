@@ -12,15 +12,16 @@ CMD_TO_ENU = {"East (x)": ("ux", "aE"),
               "North (y)": ("uy", "aN"),
               "Up (z)": ("uz", "aU")}
 
+
 MODE_SHADING = {
-    "GUIDED": ("#4c72b0", 0.10), # faint blue
+    "GUIDED": ("#4c72b0", 0.10),  # faint blue
     "STABILIZE": ("0.5", 0.12),  # faint gray
-    "LOITER": ("#55a868", 0.14), # faint green
+    "LOITER": ("#55a868", 0.14),  # faint green
 }
+
 
 def make_df(path):
     return pd.read_csv(os.path.expanduser(path))
-
 
 
 def _set_equal_3d(ax, X, Y, Z):
@@ -28,7 +29,9 @@ def _set_equal_3d(ax, X, Y, Z):
     xr, yr, zr = np.ptp(X), np.ptp(Y), np.ptp(Z)
     r = max(xr, yr, zr) / 2 or 1.0
     cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
-    ax.set_xlim(cx-r, cx+r); ax.set_ylim(cy-r, cy+r); ax.set_zlim(cz-r, cz+r)
+    ax.set_xlim(cx-r, cx+r)
+    ax.set_ylim(cy-r, cy+r)
+    ax.set_zlim(cz-r, cz+r)
     try:
         ax.set_box_aspect((1, 1, 1))
     except Exception:
@@ -49,6 +52,7 @@ def _mode_runs(df):
         yield i, j, em[i]
         i = j + 1
 
+
 def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
     """
     3D East-North-Up trajectory of the drone and its slung payload, colored by
@@ -68,8 +72,10 @@ def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
 
     seen = set()
     for i, j, mode in _mode_runs(df):
-        color = MODE_SHADING.get(mode, ("0.7", 0))[0]     # neutral gray if unknown
-        sl = slice(i, min(j + 2, len(df)))                # +1 pt to connect segments
+        color = MODE_SHADING.get(mode, ("0.7", 0))[
+            0]     # neutral gray if unknown
+        # +1 pt to connect segments
+        sl = slice(i, min(j + 2, len(df)))
         lbl = f"drone ({mode})" if mode not in seen else None
         ax.plot(E[sl], N[sl], U[sl], color=color, lw=1.8, label=lbl)
         seen.add(mode)
@@ -88,9 +94,12 @@ def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
     ax.plot(pE, pN, pU, color="tab:orange", lw=1.2, label="payload")
 
     ax.scatter([E[0]], [N[0]], [U[0]], c="red", s=45, label="start")
-    ax.scatter([0], [0], [0], c="black", marker="x", s=70, label="local origin")
+    ax.scatter([0], [0], [0], c="black", marker="x",
+               s=70, label="local origin")
 
-    ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.set_zlabel("Up [m]")
+    ax.set_xlabel("East [m]")
+    ax.set_ylabel("North [m]")
+    ax.set_zlabel("Up [m]")
     ax.set_title("3D trajectory (ENU), drone and payload")
     _set_equal_3d(ax,
                   np.concatenate([E, pE[finite], [0]]),
@@ -101,11 +110,13 @@ def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
     if save:
         fig.savefig(save, dpi=110)
 
+
 if __name__ == "__main__":
     payload_pose_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/step_test_with_camera_20260723_114555/poses.csv"
     flight_data_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/flight_20260723_114556.csv"
 
-    payload_df = get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=1)
+    payload_df = get_payload_ENU_from_data(
+        payload_pose_file, flight_data_file, time_offset=1)
     drone_df = pd.read_csv(flight_data_file)
 
     trajectory_plot_3d_with_payload(drone_df, payload_df)
