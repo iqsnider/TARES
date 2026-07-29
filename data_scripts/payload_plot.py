@@ -12,7 +12,6 @@ CMD_TO_ENU = {"East (x)": ("ux", "aE"),
               "North (y)": ("uy", "aN"),
               "Up (z)": ("uz", "aU")}
 
-
 MODE_SHADING = {
     "GUIDED": ("#4c72b0", 0.10), # faint blue
     "STABILIZE": ("0.5", 0.12),  # faint gray

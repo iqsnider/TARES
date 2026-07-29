@@ -3,8 +3,8 @@ import comms.common as comms
 from comms.control import ControlComms
 
 # autonomy research imports
-import sim.trajectory as mission
-import sim.SITL_dynamics as dynamics
+import comms.trajectory as mission
+import sim.dynamics as dynamics
 
 # logging
 from logs.flight import FlightLogger
