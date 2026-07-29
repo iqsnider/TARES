@@ -6,7 +6,7 @@ GRAVITY = 9.81 # [m/s^2]
 ##### drone parameters #####
 
 MASS_DRONE = 2.55 # [kg]
-J = np.diag([0.09, 0.09, 0.17])
+J = np.diag([0.080, 0.080, 0.129])
 # C_T = 8.7e-5
 MAX_OMEGA = 1100
 

@@ -190,10 +190,10 @@ class ArduPilotFlightController:
         """
         Computes [C_Sigma, n1, n2, n3] from the acceleration and yaw setpoint
         """
-        g = GRAVITY
-        m = MASS_TOTAL
-        Jx = J[0, 0]
-        Jz = J[2, 2]
+        g = config.GRAVITY
+        m = config.MASS_TOTAL
+        Jx = config.J[0, 0]
+        Jz = config.J[2, 2]
 
         phi = x[6]
         theta = x[7]
