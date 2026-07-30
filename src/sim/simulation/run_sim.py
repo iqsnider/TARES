@@ -2,13 +2,7 @@
 uv run run_sim.py
 uv run run_sim.py --arch drone_pd --ref-for drone
 
-The reference trajectory can be drawn for either body: --ref-for payload
-(default) puts the payload on the curve, --ref-for drone puts the drone on
-it and lets the payload swing where it likes. The choice is recorded in the
-results file so the plots label and score the right body.
-
-Writes the run to out/sim_results.npz. Plot it with:
-
+plotting
 uv run plotting.py out/sim_results.npz
 """
 

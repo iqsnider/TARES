@@ -19,8 +19,8 @@ def _drone_reference(ref, t):
 
 class PayloadLQR:
     """
-    Outer loop: 10-state payload LQR (swing aware) -> acceleration command.
-    Inner loop: ArduPilot-style cascaded attitude/rate controller.
+    Outer loop: 10-state payload LQR (swing aware) -> acceleration command
+    Inner loop: ArduPilot-style cascaded attitude/rate controller
     """
 
     def __init__(self, w_pos_xy=(1/1)**2, w_pos_z=(1/0.1)**2, tuning_const=1.0):
@@ -43,8 +43,8 @@ class PayloadLQR:
 
 class DroneLQR:
     """
-    Outer loop: 6-state double-integrator LQR on the drone only (swing blind).
-    Inner loop: ArduPilot-style cascaded attitude/rate controller.
+    Outer loop: 6-state double-integrator LQR on the drone only (swing blind)
+    Inner loop: ArduPilot-style cascaded attitude/rate controller
     """
 
     def __init__(self, q_pos_xy=1.0, q_pos_z=1.0,
@@ -67,8 +67,8 @@ class DroneLQR:
 
 class DronePD:
     """
-    Outer loop: spring-mass-damper position controller on the drone.
-    Inner loop: ArduPilot-style cascaded attitude/rate controller.
+    Outer loop: spring-mass-damper position controller on the drone
+    Inner loop: ArduPilot simulated cascaded attitude/rate controller
     """
 
     def __init__(self, wn_xy=0.4, wn_z=1.2, zeta=1.0):
@@ -86,14 +86,11 @@ class DronePD:
         return np.asarray(u, dtype=float), e
 
 
-ARCHITECTURES = {
-    'payload_lqr': PayloadLQR,
-    'drone_lqr': DroneLQR,
-    'drone_pd': DronePD,
-}
+ARCHITECTURES = {'payload_lqr': PayloadLQR,
+                 'drone_lqr': DroneLQR,
+                 'drone_pd': DronePD}
 
 
 def build(name=None, **kwargs):
-    """Instantiate a named architecture from ARCHITECTURES."""
     name = name or DEFAULT_ARCHITECTURE
     return ARCHITECTURES[name](**kwargs)
