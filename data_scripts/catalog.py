@@ -6,9 +6,9 @@ that structure back out: it walks the tree, pairs each flight log with the
 camera run recorded alongside it, and hands back `Session` objects you select
 by name instead of by path.
 
-    catalog.resolve("latest")       newest session
-    catalog.resolve("0723.last")    last run of 23 Jul
-    catalog.resolve("114556")       by timestamp fragment
+    catalog.resolve("latest")             newest session
+    catalog.resolve("07232026.last")      last run of 23 Jul 2026
+    catalog.resolve("07232026.114556")    one run, named in full
 
 Nothing here is written to disk and nothing needs maintaining: the walk costs
 about half a second over the whole archive, so the index is rebuilt on every
@@ -58,6 +58,20 @@ def defaults():
     return _metadata().get("defaults", {})
 
 
+def _as_date(token):
+    """A YYYYMMDD key from MMDDYYYY (how the folders are named) or YYYYMMDD.
+
+    Only one of the two ever parses -- 07232026 has no month 20, 20260723 has
+    no month 07 in the trailing year slot -- so there is nothing to guess.
+    """
+    for fmt in ("%m%d%Y", "%Y%m%d"):
+        try:
+            return _dt.datetime.strptime(token, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return None
+
+
 def _timestamp(name):
     """Parse YYYYMMDD_HHMMSS out of a file or directory name."""
     m = _TS.search(name)
@@ -79,7 +93,8 @@ class Session:
     # -- identity ----------------------------------------------------------
     @property
     def date(self):
-        return self.time.strftime("%m%d")
+        """MMDDYYYY, the form the selectors and the data folders use."""
+        return self.time.strftime("%m%d%Y")
 
     @property
     def has_camera(self):
@@ -256,14 +271,27 @@ def select(selector, pool=None):
     """Sessions matching `selector`, oldest first.
 
     The selector is dot-separated: a base set, then filters and ordinals.
+    A run of digits means whichever of these its length implies:
 
-        latest              the newest session
-        all                 everything
-        0723                every session on 23 Jul (or 20260723)
-        0723.cam            ...that has camera data
-        0723.cam.last       ...the last of those
-        0723.2              the third (0-based, as printed by `ls`)
-        114556              anything whose stamp contains 114556
+        8   a date, MMDDYYYY or YYYYMMDD      07232026
+        6   a time of day, HHMMSS             114556
+        4   a month and day, any year         0723
+        <=3 an index into what `ls` printed   2
+
+    So:
+
+        latest                  the newest session
+        all                     everything
+        07232026                every session on 23 Jul 2026
+        07232026.114556         one run, named in full
+        07232026.cam            ...that day's runs with camera data
+        07232026.cam.last       ...the last of those
+        07232026.2              the third of them, numbered as `ls` prints
+        latest.real             newest session that is not SITL
+
+    Filters: cam, nocam, sim, real. Ordinals: first, last, or an index.
+    A bare 4-digit day is a convenience and is not year-qualified; prefer
+    MMDDYYYY on a project that runs across years.
     """
     pool = list(pool) if pool is not None else sessions()
     if not selector:
@@ -285,6 +313,17 @@ def select(selector, pool=None):
         elif token.isdigit() and len(token) <= 3:
             i = int(token)
             pool = [pool[i]] if i < len(pool) else []
+        elif token.isdigit() and len(token) == 4:
+            pool = [s for s in pool if s.id[4:8] == token]      # MMDD
+        elif token.isdigit() and len(token) == 6:
+            pool = [s for s in pool if s.id[9:] == token]       # HHMMSS
+        elif token.isdigit() and len(token) == 8:
+            day = _as_date(token)
+            if day is None:
+                raise LookupError(
+                    f"{token!r} is not a date; write it MMDDYYYY, "
+                    f"e.g. 07232026 for 23 Jul 2026")
+            pool = [s for s in pool if s.id.startswith(day)]
         elif token.isdigit():
             pool = [s for s in pool if token in s.id]
         else:
@@ -304,8 +343,9 @@ def resolve(selector, pool=None):
         names = "\n  ".join(f"{s.id}  {s.label}" for s in hits[:12])
         more = "" if len(hits) <= 12 else f"\n  ... and {len(hits)-12} more"
         raise LookupError(
-            f"{selector!r} matches {len(hits)} sessions; add .last, .first or "
-            f"an index:\n  {names}{more}")
+            f"{selector!r} matches {len(hits)} sessions; narrow it with a time "
+            f"(e.g. 07232026.114556), .last, .first, or an index:"
+            f"\n  {names}{more}")
     return hits[0]
 
 
@@ -313,14 +353,15 @@ def resolve(selector, pool=None):
 def format_table(pool):
     """The `ls` listing: one line per session, newest last."""
     head = (f"{'#':>3}  {'session':16}  {'dur':>7}  {'rows':>6}  {'alt':>6}  "
-            f"{'ref':>7}  {'mode':12}  {'flags':7}  where")
+            f"{'ref':>7}  {'flags':7}  where")
     lines = [head, "-" * len(head)]
     for i, s in enumerate(pool):
         d = s.summary
         where = str(s.flight.parent.relative_to(DATA_ROOT))
         dup = f"  [+{len(s.duplicates)} dup]" if s.duplicates else ""
+        # a log with no rows is an aborted run; say so where mode used to
+        flags = d["modes"] if d["modes"] in ("empty", "unreadable") else s.flags
         lines.append(
             f"{i:>3}  {s.id:16}  {d['duration']:6.1f}s  {d['rows']:>6}  "
-            f"{d['alt']:6.1f}  {d['ref']:>7}  {d['modes'][:12]:12}  "
-            f"{s.flags:7}  {where}{dup}")
+            f"{d['alt']:6.1f}  {d['ref']:>7}  {flags:7}  {where}{dup}")
     return "\n".join(lines)

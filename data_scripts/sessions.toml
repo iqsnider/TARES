@@ -4,7 +4,7 @@
 # file holds the rest: clock offsets, geometry, and your own notes. Keys under
 # [sessions.<id>] override [defaults], and reach you as session.<name>:
 #
-#     s = catalog.resolve("0723.last")
+#     s = catalog.resolve("07232026.last")
 #     s.pose_offset   -> 0.17
 #
 # Add a session by copying a stamp out of `uv run plot.py ls`.
@@ -30,7 +30,7 @@ note = "23 Jul 2026, last test of the day"
 # data_06302026/data/ and again under a folder named SITL/ -- and the
 # byte-identical SITL/ copies were deleted, so `sim = true` is now the only
 # thing recording that they came out of the simulator. Filter them out of a
-# listing with `uv run plot.py ls 0630.real`.
+# listing with `uv run plot.py ls 06302026.real`.
 [sessions.20260630_105624]
 sim = true
 [sessions.20260630_111010]

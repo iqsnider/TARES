@@ -1,10 +1,13 @@
 """Plot a flight by name instead of by path.
 
-    uv run plot.py ls                 every session, newest last
-    uv run plot.py ls 0723            just that day
-    uv run plot.py latest drone       the newest flight's log plots
-    uv run plot.py 0723.last ekf      the EKF on the last run of 23 Jul
-    uv run plot.py 114556 traj        3-D trajectory, by timestamp fragment
+    uv run plot.py ls                     every session, newest last
+    uv run plot.py ls 07232026            just that day
+    uv run plot.py latest drone           the newest flight's log plots
+    uv run plot.py 07232026.last ekf      the EKF on that day's last run
+    uv run plot.py 07232026.114556 traj   one run, named in full
+
+Dates are MMDDYYYY, the way the data folders are named, and a run is
+date.time -- name both, so a coincidence between years cannot bite you.
 
 Figures open on screen and are not written anywhere; pass --save DIR when you
 actually want files. See catalog.py for how sessions are found and selected.
@@ -85,7 +88,7 @@ def main(argv=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("selector", nargs="?", default="latest",
-                    help="which session: latest, 0723.last, 114556, ...")
+                    help="which session: latest, 07232026.last, 07232026.114556")
     # not `choices`: after `ls` this slot holds a selector, not a kind
     ap.add_argument("kind", nargs="?", default=None,
                     help="what to draw: " + ", ".join(sorted(KINDS)))
