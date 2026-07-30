@@ -155,6 +155,7 @@ xs_payload = [alpha_x; alpha_y; alpha_dot_x; alpha_dot_y];
 us       = [C_Sigma; n1; n2; n3];
 %%
 % EKF derivation
+syms psi_p
 xi_I = [alpha_x %[output:group:6868ac45] %[output:5fe9a1cc]
     alpha_y %[output:5fe9a1cc]
     alpha_dot_x %[output:5fe9a1cc]
@@ -175,7 +176,6 @@ syms o_j X_j Y_j Z_j f_u f_v u_0 v_0 L_m
 l_B    = symmatrix('l_B', [3 1]);
 t_BC_B = symmatrix('t_BC_B', [3 1]);
 
-syms psi_p
 nI = qI %[output:6a3f5115]
 mI = [cos(psi_p) %[output:group:9813c335] %[output:180a574d]
     sin(psi_p) %[output:180a574d]

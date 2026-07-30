@@ -14,17 +14,17 @@ G = 9.80665
 
 
 def build_inputs(fl):
-    """Inertial-ENU specific force + attitude vs flight time. Computed once."""
+    """Inertial-ENU specific force f_I + attitude vs flight time. Computed once."""
     a_frd = fl[['drone_ax_meas', 'drone_ay_meas', 'drone_az_meas']].to_numpy()*G / \
         1000.
-    roll = fl.drone_roll.to_numpy()
-    pitch = fl.drone_pitch.to_numpy()
-    yaw = fl.drone_yaw.to_numpy()
-    u = np.empty_like(a_frd)
+    phi = fl.drone_roll.to_numpy()
+    theta = fl.drone_pitch.to_numpy()
+    psi = fl.drone_yaw.to_numpy()
+    f_I = np.empty_like(a_frd)
     for i in range(len(fl)):
-        u[i] = ekfm.C_nb_enu(roll[i], pitch[i], yaw[i]
-                             ) @ (ekfm.P_SWAP @ a_frd[i])
-    return dict(t=fl.cur_time.to_numpy(), u=u, roll=roll, pitch=pitch, yaw=yaw)
+        f_I[i] = ekfm.C_IB_enu(phi[i], theta[i], psi[i]
+                               ) @ (ekfm.P_SWAP @ a_frd[i])
+    return dict(t=fl.cur_time.to_numpy(), f_I=f_I, phi=phi, theta=theta, psi=psi)
 
 
 def group_frames(pose):
@@ -39,7 +39,7 @@ def group_frames(pose):
 
 
 def run(frames, inp, params, offset):
-    t_fl, u_fl = inp['t'], inp['u']
+    t_fl, f_fl = inp['t'], inp['f_I']
     xi = P = None
     t_prev = None
     rows = []
@@ -47,30 +47,32 @@ def run(frames, inp, params, offset):
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
-        r = np.interp(t, t_fl, inp['roll'])
-        p_ = np.interp(t, t_fl, inp['pitch'])
-        y = np.interp(t, t_fl, inp['yaw'])
-        uu = np.array([np.interp(t, t_fl, u_fl[:, 0]),
-                       np.interp(t, t_fl, u_fl[:, 1]),
-                       np.interp(t, t_fl, u_fl[:, 2])])
+        phi = np.interp(t, t_fl, inp['phi'])
+        theta = np.interp(t, t_fl, inp['theta'])
+        psi = np.interp(t, t_fl, inp['psi'])
+        f_I = np.array([np.interp(t, t_fl, f_fl[:, 0]),
+                        np.interp(t, t_fl, f_fl[:, 1]),
+                        np.interp(t, t_fl, f_fl[:, 2])])
         if xi is None:
             if not meas:
                 continue
-            ctr = payload.get_payload_center_in_camera_frame(g)
-            R, _ = cv2.Rodrigues(det[['rx', 'ry', 'rz']].iloc[0].to_numpy())
-            xi, P = ekfm.initial_state(ctr, r, p_, y, marker_R=R)
+            p_C_payload = payload.get_payload_center_in_camera_frame(g)
+            C_CM, _ = cv2.Rodrigues(det[['rx', 'ry', 'rz']].iloc[0].to_numpy())
+            xi, P = ekfm.initial_state(p_C_payload, phi, theta, psi, C_CM=C_CM)
             t_prev = t_cam
             continue
         dt = min(max(t_cam - t_prev, 1e-3), 0.5)
         t_prev = t_cam
-        xi, P, info = ekfm.ekf(xi, P, uu, dt, params, measurements=meas,
-                               roll=r, pitch=p_, yaw=y)
+        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, measurements=meas,
+                               phi=phi, theta=theta, psi=psi)
         rows.append((t_cam, t, info['n_markers'], info['nis'],
                      xi[0], xi[1], xi[2], xi[3], xi[4],
-                     math.sqrt(P[0, 0]), math.sqrt(P[1, 1]), r, p_, y))
-    return pd.DataFrame(rows, columns=['t_cam', 't_flight', 'n', 'nis', 'ax', 'ay',
-                                       'dax', 'day', 'yawp', 'sax', 'say',
-                                       'roll', 'pitch', 'yaw'])
+                     math.sqrt(P[0, 0]), math.sqrt(P[1, 1]), phi, theta, psi))
+    return pd.DataFrame(rows, columns=['t_cam', 't_flight', 'n', 'nis',
+                                       'alpha_x', 'alpha_y',
+                                       'alpha_dot_x', 'alpha_dot_y', 'psi_p',
+                                       'sigma_alpha_x', 'sigma_alpha_y',
+                                       'phi', 'theta', 'psi'])
 
 
 def mean_nnis(df, warmup=3.0):
@@ -104,8 +106,8 @@ def load_calibration(path=CALIB_PATH):
 
 def make_params(L, L_m=8.31, calib_path=CALIB_PATH, **kw):
     mtx, dist = load_calibration(calib_path)
-    kw.setdefault("q", 0.02**2)
-    kw.setdefault("q_yaw", 0.3**2)
+    kw.setdefault("q_alpha", 0.02**2)
+    kw.setdefault("q_psi_p", 0.3**2)
     kw.setdefault("sigma_det", 0.4)
     kw.setdefault("sigma_att", math.radians(0.5))
     return ekfm.EKFParams(mtx, dist, L=L, L_m=L_m, **kw)

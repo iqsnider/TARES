@@ -11,13 +11,14 @@ P_SWAP = np.array([[0, 1, 0],
                    [1, 0, 0],
                    [0, 0, -1]])
 
+# xi_I = [alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, psi_p]
 STATE_DIM = 5
-IX_AX, IX_AY, IX_DAX, IX_DAY, IX_YAWP = range(STATE_DIM)
+IX_ALPHA_X, IX_ALPHA_Y, IX_ALPHA_DOT_X, IX_ALPHA_DOT_Y, IX_PSI_P = range(STATE_DIM)
 
 
-def to_inertial_frame_from_body_frame(phi, theta, psi):
+def C_IB_from_euler(phi, theta, psi):
     """
-    Transformation matrix to the inertial frame from the body fixed frame
+    C_IB: rotation to the inertial frame from the body fixed frame
     """
     sp, cp = math.sin(phi), math.cos(phi)
     st, ct = math.sin(theta), math.cos(theta)
@@ -25,64 +26,64 @@ def to_inertial_frame_from_body_frame(phi, theta, psi):
 
     return np.array([[ct*cy, sp*st*cy - cp*sy, cp*st*cy + sp*sy],
                      [ct*sy, sp*st*sy + cp*cy, cp*st*sy - sp*cy],
-                     [-st,   sp*ct,            cp*ct]])
+                     [-st, sp*ct, cp*ct]])
 
 
-def C_nb_enu(roll, pitch, yaw):
+def C_IB_enu(phi, theta, psi):
     """
-    Camera rotation from ENU body (starboard, nose, up) -> ENU inertial
+    C_IB for ENU body (starboard, nose, up) -> ENU inertial
     """
-    return P_SWAP @ to_inertial_frame_from_body_frame(roll, pitch, yaw) @ P_SWAP
+    return P_SWAP @ C_IB_from_euler(phi, theta, psi) @ P_SWAP
 
 
-def n_hat(alpha_x, alpha_y):
+def n_I(alpha_x, alpha_y):
     """
-    Unit vector from pivot toward the payload, INERTIAL frame
+    nI: unit vector from pivot toward the payload, INERTIAL frame
     """
-    sx, cx = math.sin(alpha_x), math.cos(alpha_x)
-    sy, cy = math.sin(alpha_y), math.cos(alpha_y)
+    sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+    say, cay = math.sin(alpha_y), math.cos(alpha_y)
 
-    return np.array([sx*cy,
-                     sy,
-                     -cx*cy])
+    return np.array([sax*cay,
+                     say,
+                     -cax*cay])
 
 
-def dn_hat(alpha_x, alpha_y):
+def dn_I_dalpha(alpha_x, alpha_y):
     """
-    d n_hat / d(alpha_x, alpha_y), 3X2 matrix
+    d nI / d(alpha_x, alpha_y), 3X2 matrix
     """
-    sx, cx = math.sin(alpha_x), math.cos(alpha_x)
-    sy, cy = math.sin(alpha_y), math.cos(alpha_y)
+    sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+    say, cay = math.sin(alpha_y), math.cos(alpha_y)
 
-    return np.array([[cx*cy, -sx*sy],
-                     [0, cy],
-                     [sx*cy, cx*sy]])
+    return np.array([[cax*cay, -sax*say],
+                     [0, cay],
+                     [sax*cay, cax*say]])
 
 
-def m_hat(yaw_p):
+def m_I(psi_p):
     """
-    Unit vector along the marker row, INERTIAL frame (horizontal).
+    mI: unit vector along the marker row, INERTIAL frame (horizontal)
     """
-    return np.array([math.cos(yaw_p),
-                     math.sin(yaw_p),
+    return np.array([math.cos(psi_p),
+                     math.sin(psi_p),
                      0])
 
 
-def dm_hat(yaw_p):
+def dm_I_dpsi_p(psi_p):
     """
-    d m_hat / d yaw_p, 3X1 matrix
+    d mI / d psi_p, 3X1 matrix
     """
-    return np.array([-math.sin(yaw_p),
-                     math.cos(yaw_p),
+    return np.array([-math.sin(psi_p),
+                     math.cos(psi_p),
                      0])
 
 
-def angles_from_direction(n_inertial):
+def alpha_from_n_I(n):
     """
     Returns (alpha_x, alpha_y) from any pivot->payload vector
     expressed in the inertial frame. Used primarily for initialization
     """
-    n = np.asarray(n_inertial, dtype=float)
+    n = np.asarray(n, dtype=float)
     n = n / np.linalg.norm(n)
     alpha_y = math.asin(np.clip(n[1], -1, 1))
     alpha_x = math.atan2(n[0], -n[2])
@@ -100,11 +101,11 @@ class EKFParams:
                  dist, # distortion coefficients
                  L=None, # tether length for DYNAMICS [m]
                  L_m=None, # pivot -> marker board center [m]
-                 C_bc=None, # camera -> body
-                 t_bc=None, # camera optical center in body [m]
-                 l_piv=None, # tether pivot in body frame [m]
-                 q=(0.02)**2, # process noise on ddalpha [rad^2/s^3]
-                 q_yaw=(0.3)**2, # process noise on yaw_p [rad^2/s]
+                 C_BC=None, # camera -> body
+                 t_BC_B=None, # camera optical center in body [m]
+                 l_B=None, # tether pivot in body frame [m]
+                 q_alpha=(0.02)**2, # process noise on alpha_ddot
+                 q_psi_p=(0.3)**2, # process noise on psi_p
                  sigma_det=0.4, # marker centroid noise [px]
                  sigma_att=math.radians(0.5)): # attitude 1-sigma [rad]
 
@@ -112,15 +113,15 @@ class EKFParams:
         self.dist = np.asarray(dist, dtype=float)
         self.L = config.TETHER_LEN if L is None else L
         self.L_m = self.L if L_m is None else L_m
-        self.C_bc = config.CAM_R if C_bc is None else np.asarray(C_bc, float)
-        self.C_cb = self.C_bc.T
-        self.t_bc = (np.array([config.CAM_OFFSET_X,
-                               config.CAM_OFFSET_Y,
-                               config.CAM_OFFSET_Z])
-                     if t_bc is None else np.asarray(t_bc, float))
-        self.l_piv = np.zeros(3) if l_piv is None else np.asarray(l_piv, float)
-        self.q = q
-        self.q_yaw = q_yaw
+        self.C_BC = config.CAM_R if C_BC is None else np.asarray(C_BC, float)
+        self.C_CB = self.C_BC.T
+        self.t_BC_B = (np.array([config.CAM_OFFSET_X,
+                                 config.CAM_OFFSET_Y,
+                                 config.CAM_OFFSET_Z])
+                       if t_BC_B is None else np.asarray(t_BC_B, float))
+        self.l_B = np.zeros(3) if l_B is None else np.asarray(l_B, float)
+        self.q_alpha = q_alpha
+        self.q_psi_p = q_psi_p
         self.sigma_det = sigma_det
         self.sigma_att = sigma_att
 
@@ -132,110 +133,120 @@ class EKFParams:
     def f_v(self):
         return self.mtx[1, 1]
 
+    @property
+    def u_0(self):
+        return self.mtx[0, 2]
+
+    @property
+    def v_0(self):
+        return self.mtx[1, 2]
+
     def pixel_variance(self):
         """
         Detection noise plus attitude error mapped into pixels
         """
-        return self.sigma_det**2 + (self.f_u * self.sigma_att)**2
+        return self.sigma_det**2 + (self.f_u*self.sigma_att)**2
 
 
-def f_dynamics(xi, u, L):
+def xi_dot_I(xi, f_I, L):
     """
-    nonlinear pendulum model
-    u is specific force in the INERTIAL frame.
-    [dax, day, ddax, dday, dyaw_p]
-    payload yaw rate is purely a placeholder for a later algebraic computation
+    [alpha_dot_x, alpha_dot_y, alpha_ddot_x, alpha_ddot_y, 0]
+
+    f_I is specific force in the inertial frame, so m_D is already folded in
     """
-    ax, ay, dax, day, _ = xi
-    u1, u2, u3 = u
-    sx, cx = math.sin(ax), math.cos(ax)
-    sy, cy = math.sin(ay), math.cos(ay)
+    alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
+    fx, fy, fz = f_I
+    sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+    say, cay = math.sin(alpha_y), math.cos(alpha_y)
 
-    ddax = -(cx*u1 + sx*u3)/(L*cy) + 2*(sy/cy)*dax*day
-    dday = -(cy*u2 + sy*(cx*u3 - sx*u1))/L - sy*cy*dax**2
+    alpha_ddot_x = (-(cax*fx + sax*fz)/(L*cay)
+                    + 2*(say/cay)*alpha_dot_x*alpha_dot_y)
+    alpha_ddot_y = (-(cay*fy + say*(cax*fz - sax*fx))/L
+                    - say*cay*alpha_dot_x**2)
 
-    return np.array([dax,
-                     day,
-                     ddax,
-                     dday,
+    return np.array([alpha_dot_x,
+                     alpha_dot_y,
+                     alpha_ddot_x,
+                     alpha_ddot_y,
                      0])
 
 
-def F_jacobian(xi, u, L):
+def F_jacobian(xi, f_I, L):
     """
-    F 5X5 matrix
+    F = jacobian(xi_dot_I, xi_I), 5X5 matrix
     """
-    ax, ay, dax, day, _ = xi
-    u1, u2, u3 = u
-    sx, cx = math.sin(ax), math.cos(ax)
-    sy, cy = math.sin(ay), math.cos(ay)
+    alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
+    fx, fy, fz = f_I
+    sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+    say, cay = math.sin(alpha_y), math.cos(alpha_y)
 
     F = np.zeros((STATE_DIM, STATE_DIM))
-    F[IX_AX, IX_DAX] = 1
-    F[IX_AY, IX_DAY] = 1
+    F[IX_ALPHA_X, IX_ALPHA_DOT_X] = 1
+    F[IX_ALPHA_Y, IX_ALPHA_DOT_Y] = 1
 
-    F[IX_DAX, IX_AX] = (sx*u1 - cx*u3)/(L*cy)
-    F[IX_DAX, IX_AY] = -(cx*u1 + sx*u3)*sy/(L*cy**2) + 2*dax*day/cy**2
-    F[IX_DAX, IX_DAX] = 2*(sy/cy)*day
-    F[IX_DAX, IX_DAY] = 2*(sy/cy)*dax
+    F[IX_ALPHA_DOT_X, IX_ALPHA_X] = (sax*fx - cax*fz)/(L*cay)
+    F[IX_ALPHA_DOT_X, IX_ALPHA_Y] = (-(cax*fx + sax*fz)*say/(L*cay**2)
+                                     + 2*alpha_dot_x*alpha_dot_y/cay**2)
+    F[IX_ALPHA_DOT_X, IX_ALPHA_DOT_X] = 2*(say/cay)*alpha_dot_y
+    F[IX_ALPHA_DOT_X, IX_ALPHA_DOT_Y] = 2*(say/cay)*alpha_dot_x
 
-    F[IX_DAY, IX_AX] = sy*(cx*u1 + sx*u3)/L
-    F[IX_DAY, IX_AY] = (sy*u2 - cy*(cx*u3 - sx*u1))/L - math.cos(2*ay)*dax**2
-    F[IX_DAY, IX_DAX] = -2*sy*cy*dax
-
-    # yaw_p row stays zero: random walk
+    F[IX_ALPHA_DOT_Y, IX_ALPHA_X] = say*(cax*fx + sax*fz)/L
+    F[IX_ALPHA_DOT_Y, IX_ALPHA_Y] = ((say*fy - cay*(cax*fz - sax*fx))/L
+                                     - math.cos(2*alpha_y)*alpha_dot_x**2)
+    F[IX_ALPHA_DOT_Y, IX_ALPHA_DOT_X] = -2*say*cay*alpha_dot_x
     return F
 
 
-def rk4_step(xi, u, dt, L):
+def rk4_step(xi, f_I, dt, L):
     """
     RK4 Integration
     """
-    k1 = f_dynamics(xi, u, L)
-    k2 = f_dynamics(xi + 0.5*dt*k1, u, L)
-    k3 = f_dynamics(xi + 0.5*dt*k2, u, L)
-    k4 = f_dynamics(xi + dt*k3, u, L)
+    k1 = xi_dot_I(xi, f_I, L)
+    k2 = xi_dot_I(xi + 0.5*dt*k1, f_I, L)
+    k3 = xi_dot_I(xi + 0.5*dt*k2, f_I, L)
+    k4 = xi_dot_I(xi + dt*k3, f_I, L)
 
     return xi + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
 
 
-def marker_prediction(xi, offset, C_bn, params):
+def marker_prediction(xi, o_j, C_BI, params):
     """
-    Predicted pixel and Jacobian for one marker.
+    Predicted pixel h_j and Jacobian H_j for one marker.
 
-    xi: payload state
-    offset: MARKER_OFFSET[marker_id], signed, along the marker row [m]
-    C_bn: inertial -> body rotation
+    xi: payload state xi_I
+    o_j: MARKER_OFFSET[marker_id], signed, along the marker row [m]
+    C_BI: rotation to body from inertial
     params: EKFParams
     """
-    ax, ay, _, _, yaw_p = xi
-    n = n_hat(ax, ay)
-    m = m_hat(yaw_p)
+    alpha_x, alpha_y, _, _, psi_p = xi
+    n = n_I(alpha_x, alpha_y)
+    m = m_I(psi_p)
 
     # marker position relative to the pivot, inertial frame
-    p_n = params.L_m*n - offset*m
+    p_I_j = params.L_m*n - o_j*m
 
     # expressed in body, then relative to the camera, then in camera frame
-    p_b = params.l_piv + C_bn @ p_n - params.t_bc
-    p_c = params.C_cb @ p_b
+    p_B_j = params.l_B + C_BI @ p_I_j - params.t_BC_B
+    p_C_j = params.C_CB @ p_B_j
 
-    X, Y, Z = p_c
+    X_j, Y_j, Z_j = p_C_j
 
     f_u, f_v = params.f_u, params.f_v
-    u0, v0 = params.mtx[0, 2], params.mtx[1, 2]
-    h = np.array([f_u*X/Z + u0, f_v*Y/Z + v0])
+    u_0, v_0 = params.u_0, params.v_0
+    h_j = np.array([f_u*X_j/Z_j + u_0, f_v*Y_j/Z_j + v_0])
 
-    # d(pixel)/d(p_c)
-    dpi = np.array([[f_u/Z, 0, -f_u*X/Z**2],
-                    [0, f_v/Z, -f_v*Y/Z**2]])
-    # d(pixel)/d(p_n)
-    M = dpi @ params.C_cb @ C_bn
+    # d h_j / d p_C_j
+    dh_dpC = np.array([[f_u/Z_j, 0, -f_u*X_j/Z_j**2],
+                       [0, f_v/Z_j, -f_v*Y_j/Z_j**2]])
+    # d h_j / d p_I_j
+    dh_dpI = dh_dpC @ params.C_CB @ C_BI
 
-    H = np.zeros((2, STATE_DIM))
-    H[:, IX_AX:IX_AY+1] = params.L_m*(M @ dn_hat(ax, ay))
-    H[:, IX_YAWP] = -offset*(M @ dm_hat(yaw_p))
+    # H_j = dh_dpC * C_CB * C_BI * dpI_dxi
+    H_j = np.zeros((2, STATE_DIM))
+    H_j[:, IX_ALPHA_X:IX_ALPHA_Y+1] = params.L_m*(dh_dpI @ dn_I_dalpha(alpha_x, alpha_y))
+    H_j[:, IX_PSI_P] = -o_j*(dh_dpI @ dm_I_dpsi_p(psi_p))
 
-    return h, H, p_c
+    return h_j, H_j, p_C_j
 
 
 def undistort_pixels(uv, params):
@@ -247,33 +258,29 @@ def undistort_pixels(uv, params):
     return out.reshape(-1, 2)
 
 
-def ekf_predict(xi, P, u, dt, params):
+def ekf_predict(xi, P, f_I, dt, params):
     """
-    Propagate state and covariance one step. u is inertial specific force
+    Propagate state and covariance one step. f_I is inertial specific force
     """
     xi = np.asarray(xi, dtype=float)
     P = np.asarray(P, dtype=float)
 
-    xi_pred = rk4_step(xi, u, dt, params.L)
+    xi_pred = rk4_step(xi, f_I, dt, params.L)
 
-    F = F_jacobian(xi, u, params.L)
+    F = F_jacobian(xi, f_I, params.L)
     Fdt = F*dt
     Phi = np.eye(STATE_DIM) + Fdt + 0.5*(Fdt @ Fdt)
 
-    Q = np.diag([0, 0, params.q, params.q, params.q_yaw]) * dt
+    Q = np.diag([0, 0, params.q_alpha, params.q_alpha, params.q_psi_p])*dt
     P_pred = Phi @ P @ Phi.T + Q
     P_pred = 0.5*(P_pred + P_pred.T)
 
     return xi_pred, P_pred
 
 
-def ekf_update(xi, P, measurements, roll, pitch, yaw, params, already_undistorted=False):
+def ekf_update(xi, P, measurements, phi, theta, psi, params, already_undistorted=False):
     """
     Fold in every marker detected in one camera frame
-
-    measurements  iterable of (marker_id, u_px, v_px), raw image pixels
-    roll/pitch/yaw  drone attitude at the IMAGE timestamp, ArduPilot NED
-                    convention (the flight log's drone_roll/pitch/yaw)
     """
     xi = np.asarray(xi, dtype=float).copy()
     P = np.asarray(P, dtype=float).copy()
@@ -289,17 +296,17 @@ def ekf_update(xi, P, measurements, roll, pitch, yaw, params, already_undistorte
     if not already_undistorted:
         uv = undistort_pixels(uv, params)
 
-    C_bn = C_nb_enu(roll, pitch, yaw).T
+    C_BI = C_IB_enu(phi, theta, psi).T
 
     z_rows, h_rows, H_rows = [], [], []
     for marker_id, z_uv in zip(ids, uv):
-        offset = payload.MARKER_OFFSET[marker_id]
-        h, H, _ = marker_prediction(xi, offset, C_bn, params)
-        if h is None:
+        o_j = payload.MARKER_OFFSET[marker_id]
+        h_j, H_j, _ = marker_prediction(xi, o_j, C_BI, params)
+        if h_j is None:
             continue
         z_rows.append(z_uv)
-        h_rows.append(h)
-        H_rows.append(H)
+        h_rows.append(h_j)
+        H_rows.append(H_j)
 
     if not z_rows:
         return xi, P, info
@@ -309,32 +316,32 @@ def ekf_update(xi, P, measurements, roll, pitch, yaw, params, already_undistorte
     H = np.vstack(H_rows)
     R = params.pixel_variance() * np.eye(z.size)
 
-    nu = z - h
+    y = z - h
     S = H @ P @ H.T + R
     K = P @ H.T @ np.linalg.inv(S)
 
-    xi = xi + K @ nu
-    xi[IX_YAWP] = math.atan2(math.sin(xi[IX_YAWP]), math.cos(xi[IX_YAWP]))
+    xi = xi + K @ y
+    xi[IX_PSI_P] = math.atan2(math.sin(xi[IX_PSI_P]), math.cos(xi[IX_PSI_P]))
 
     P = (np.eye(STATE_DIM) - K @ H) @ P
     P = 0.5*(P + P.T)
 
     info["n_markers"] = len(z_rows)
-    info["innovation"] = nu
-    info["nis"] = float(nu @ np.linalg.solve(S, nu))
+    info["innovation"] = y
+    info["nis"] = float(y @ np.linalg.solve(S, y))
 
     return xi, P, info
 
 
-def ekf(xi, P, u, dt, params, measurements=None, roll=0, pitch=0, yaw=0, already_undistorted=False):
+def ekf(xi, P, f_I, dt, params, measurements=None, phi=0, theta=0, psi=0, already_undistorted=False):
     """
     One full filter tick: predict, then update if a camera frame arrived
 
-    u: 3X1 drone specific force, INERTIAL frame. Hover = [0, 0, +g]
+    f_I: 3X1 drone specific force, INERTIAL frame. Hover = [0, 0, +g0]
     """
-    xi, P = ekf_predict(xi, P, u, dt, params)
+    xi, P = ekf_predict(xi, P, f_I, dt, params)
     if measurements:
-        xi, P, info = ekf_update(xi, P, measurements, roll, pitch, yaw,
+        xi, P, info = ekf_update(xi, P, measurements, phi, theta, psi,
                                  params, already_undistorted)
     else:
         info = {"n_markers": 0, "innovation": None, "nis": None}
@@ -342,24 +349,27 @@ def ekf(xi, P, u, dt, params, measurements=None, roll=0, pitch=0, yaw=0, already
     return xi, P, info
 
 
-def initial_state(payload_center_camera_frame, roll, pitch, yaw, marker_R=None, sigma_alpha=0.02):
+def initial_state(p_C_payload, phi, theta, psi, C_CM=None, sigma_alpha=0.02):
     """
-    Seed the filter from one frame's PnP output. Initialisation only
-    """
-    C_nb = C_nb_enu(roll, pitch, yaw)
-    p_b = config.CAM_R @ np.asarray(payload_center_camera_frame, float)
-    p_n = C_nb @ p_b
-    alpha_x, alpha_y = angles_from_direction(p_n)
+    Seed the filter from one frame's PnP output.
 
-    if marker_R is not None:
-        m_n = C_nb @ (config.CAM_R @ np.asarray(marker_R, float)[:, 0])
-        yaw_p = math.atan2(m_n[1], m_n[0])
-        sigma_yaw = math.radians(15)
+    p_C_payload: payload board center in the camera frame
+    C_CM: marker -> camera rotation from PnP, first column is mI in camera frame
+    """
+    C_IB = C_IB_enu(phi, theta, psi)
+    p_B = config.CAM_R @ np.asarray(p_C_payload, float)
+    p_I = C_IB @ p_B
+    alpha_x, alpha_y = alpha_from_n_I(p_I)
+
+    if C_CM is not None:
+        m = C_IB @ (config.CAM_R @ np.asarray(C_CM, float)[:, 0])
+        psi_p = math.atan2(m[1], m[0])
+        sigma_psi_p = math.radians(15)
     else:
-        yaw_p = 0
-        sigma_yaw = math.pi
+        psi_p = 0
+        sigma_psi_p = math.pi
 
-    xi = np.array([alpha_x, alpha_y, 0, 0, yaw_p])
-    P = np.diag([sigma_alpha**2, sigma_alpha**2, 1, 1, sigma_yaw**2])
+    xi = np.array([alpha_x, alpha_y, 0, 0, psi_p])
+    P = np.diag([sigma_alpha**2, sigma_alpha**2, 1, 1, sigma_psi_p**2])
 
     return xi, P

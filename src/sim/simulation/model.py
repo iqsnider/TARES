@@ -37,17 +37,17 @@ def nonlinear_ode(x, u):
     F_thrust_I = T_EB @ np.array([0, 0, C_Sigma])
     Ftx, Fty, Ftz = F_thrust_I
 
-    # payload position relative to drone
+    # unit vector for the direction of the payload relative to the inertial vertical
     qI = np.array([sax*cay,
                    say,
-                   -cax * cay])
+                   -cax*cay])
 
     T = -(mP * (Ftz*cax*cay - Fty*say - Ftx*cay*sax
               + L*aly_d**2*mD + L*alx_d**2*mD*cay**2)) / (mD + mP)
     # tension along the cable, drone toward load
     F_cable_I = T*qI
 
-    # translational acceleration
+    # translational acceleration inertial frame
     ddx = C_Sigma/mD * (cy*st*cp + sy*sp) - F_cable_I[0]/mD
     ddy = C_Sigma/mD * (sy*st*cp - cy*sp) - F_cable_I[1]/mD
     ddz = C_Sigma/mD * (ct*cp) - g - F_cable_I[2]/mD

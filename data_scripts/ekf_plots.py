@@ -72,36 +72,36 @@ def run_full(frames, inp, params, offset):
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
-        r = np.interp(t, t_fl, inp["roll"])
-        p_ = np.interp(t, t_fl, inp["pitch"])
-        y = np.interp(t, t_fl, inp["yaw"])
-        uu = np.array([np.interp(t, t_fl, inp["u"][:, k]) for k in range(3)])
+        phi = np.interp(t, t_fl, inp["phi"])
+        theta = np.interp(t, t_fl, inp["theta"])
+        psi = np.interp(t, t_fl, inp["psi"])
+        f_I = np.array([np.interp(t, t_fl, inp["f_I"][:, k]) for k in range(3)])
 
         if xi is None:
             if not meas:
                 continue
-            ctr = payload.get_payload_center_in_camera_frame(g)
-            R, _ = cv2.Rodrigues(det[["rx", "ry", "rz"]].iloc[0].to_numpy())
-            xi, P = ekfm.initial_state(ctr, r, p_, y, marker_R=R)
+            p_C_payload = payload.get_payload_center_in_camera_frame(g)
+            C_CM, _ = cv2.Rodrigues(det[["rx", "ry", "rz"]].iloc[0].to_numpy())
+            xi, P = ekfm.initial_state(p_C_payload, phi, theta, psi, C_CM=C_CM)
             t_prev = t_cam
             continue
 
         dt = min(max(t_cam - t_prev, 1e-3), 0.5)
         t_prev = t_cam
-        xi, P, info = ekfm.ekf(xi, P, uu, dt, params,
-                               measurements=meas, roll=r, pitch=p_, yaw=y)
+        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, measurements=meas,
+                               phi=phi, theta=theta, psi=psi)
 
-        C_bn = ekfm.C_nb_enu(r, p_, y).T
+        C_BI = ekfm.C_IB_enu(phi, theta, psi).T
         pred = {}
         for mid in IDS:
-            h, H, p_c = ekfm.marker_prediction(xi, payload.MARKER_OFFSET[mid],
-                                               C_bn, params)
+            h_j, H_j, p_C_j = ekfm.marker_prediction(
+                xi, payload.MARKER_OFFSET[mid], C_BI, params)
             # a marker behind the camera still projects, to a mirrored point
-            pred[mid] = h if p_c[2] > 0 else None
-        h0, H0, p_c0 = ekfm.marker_prediction(xi, 0.0, C_bn, params)
-        S0 = H0 @ P @ H0.T if p_c0[2] > 0 else None
-        if p_c0[2] <= 0:
-            h0 = None
+            pred[mid] = h_j if p_C_j[2] > 0 else None
+        h_c, H_c, p_C_c = ekfm.marker_prediction(xi, 0.0, C_BI, params)
+        S_c = H_c @ P @ H_c.T if p_C_c[2] > 0 else None
+        if p_C_c[2] <= 0:
+            h_c = None
 
         muv = {}
         if meas:
@@ -111,10 +111,17 @@ def run_full(frames, inp, params, offset):
 
         out.append(dict(t_cam=t_cam, t_flight=t, n=info["n_markers"],
                         nis=info["nis"],
-                        ax=xi[0], ay=xi[1], dax=xi[2], day=xi[3], yawp=xi[4],
-                        sax=math.sqrt(P[0, 0]), say=math.sqrt(P[1, 1]),
-                        n_hat=ekfm.n_hat(xi[0], xi[1]),
-                        pred=pred, pred_c=h0, S_c=S0, meas=muv))
+                        alpha_x=xi[ekfm.IX_ALPHA_X],
+                        alpha_y=xi[ekfm.IX_ALPHA_Y],
+                        alpha_dot_x=xi[ekfm.IX_ALPHA_DOT_X],
+                        alpha_dot_y=xi[ekfm.IX_ALPHA_DOT_Y],
+                        psi_p=xi[ekfm.IX_PSI_P],
+                        sigma_alpha_x=math.sqrt(P[ekfm.IX_ALPHA_X,
+                                                 ekfm.IX_ALPHA_X]),
+                        sigma_alpha_y=math.sqrt(P[ekfm.IX_ALPHA_Y,
+                                                 ekfm.IX_ALPHA_Y]),
+                        n_I=ekfm.n_I(xi[ekfm.IX_ALPHA_X], xi[ekfm.IX_ALPHA_Y]),
+                        pred=pred, pred_c=h_c, S_c=S_c, meas=muv))
     return out
 
 
@@ -125,8 +132,8 @@ def direct_measurement(frames, inp, offset):
     truth -- it carries the same attitude error plus PnP depth noise.
     """
     t_fl = inp["t"]
-    t_bc = np.array([config.CAM_OFFSET_X, config.CAM_OFFSET_Y,
-                     config.CAM_OFFSET_Z])
+    t_BC_B = np.array([config.CAM_OFFSET_X, config.CAM_OFFSET_Y,
+                       config.CAM_OFFSET_Z])
     rows = []
     for t_cam, meas, det, g in frames:
         if len(det) == 0:
@@ -134,20 +141,21 @@ def direct_measurement(frames, inp, offset):
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
-        ctr = payload.get_payload_center_in_camera_frame(g)
-        if ctr is None:
+        p_C_payload = payload.get_payload_center_in_camera_frame(g)
+        if p_C_payload is None:
             continue
-        p_b = config.CAM_R @ ctr + t_bc
-        r = np.interp(t, t_fl, inp["roll"])
-        p_ = np.interp(t, t_fl, inp["pitch"])
-        y = np.interp(t, t_fl, inp["yaw"])
-        ax_, ay_ = ekfm.angles_from_direction(ekfm.C_nb_enu(r, p_, y) @ p_b)
-        rows.append((t_cam, ax_, ay_, len(det)))
-    return pd.DataFrame(rows, columns=["t_cam", "ax", "ay", "n"])
+        p_B = config.CAM_R @ p_C_payload + t_BC_B
+        phi = np.interp(t, t_fl, inp["phi"])
+        theta = np.interp(t, t_fl, inp["theta"])
+        psi = np.interp(t, t_fl, inp["psi"])
+        alpha_x, alpha_y = ekfm.alpha_from_n_I(
+            ekfm.C_IB_enu(phi, theta, psi) @ p_B)
+        rows.append((t_cam, alpha_x, alpha_y, len(det)))
+    return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y", "n"])
 
 
 def estimated_payload_enu(records, fl, L_m):
-    """p_payload = p_drone + L_m * n_hat, drone position interpolated.
+    """p_payload = p_drone + L_m * n_I, drone position interpolated.
 
     Returns (t_flight, ENU) so the caller can put the estimate on a timeline.
     """
@@ -156,7 +164,7 @@ def estimated_payload_enu(records, fl, L_m):
     E = np.interp(tf, t, fl.drone_px_meas.to_numpy())
     N = np.interp(tf, t, fl.drone_py_meas.to_numpy())
     U = np.interp(tf, t, fl.drone_pz_meas.to_numpy())
-    n = np.array([r["n_hat"] for r in records])
+    n = np.array([r["n_I"] for r in records])
     return tf, np.c_[E, N, U] + L_m * n
 
 
@@ -193,22 +201,23 @@ def analyse(session, verbose=True):
 def summarise(records, meas_df):
     """Print the numbers worth checking after every run."""
     R = pd.DataFrame([{k: v for k, v in r.items()
-                       if k in ("t_cam", "n", "nis", "ax", "ay", "sax", "say")}
+                       if k in ("t_cam", "n", "nis", "alpha_x", "alpha_y",
+                                "sigma_alpha_x", "sigma_alpha_y")}
                       for r in records])
     sel = R.n > 0
-    mi = np.interp(R.t_cam, meas_df.t_cam, meas_df.ax)
-    mj = np.interp(R.t_cam, meas_df.t_cam, meas_df.ay)
+    mi = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_x)
+    mj = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_y)
     warm = R[(R.n > 0) & (R.t_cam > R.t_cam.min() + 3)]
     gaps = np.diff(R.t_cam[sel].to_numpy())
     print(f"  alpha_x RMS vs direct measurement : "
-          f"{np.rad2deg(np.sqrt(np.mean((R.ax[sel]-mi[sel])**2))):.3f} deg")
+          f"{np.rad2deg(np.sqrt(np.mean((R.alpha_x[sel]-mi[sel])**2))):.3f} deg")
     print(f"  alpha_y RMS vs direct measurement : "
-          f"{np.rad2deg(np.sqrt(np.mean((R.ay[sel]-mj[sel])**2))):.3f} deg")
+          f"{np.rad2deg(np.sqrt(np.mean((R.alpha_y[sel]-mj[sel])**2))):.3f} deg")
     print(f"  mean normalised NIS               : "
           f"{np.mean(warm.nis/(2*warm.n)):.3f}  (target 1.0)")
     print(f"  mean 1-sigma alpha                : "
-          f"{np.rad2deg(R.sax[sel].mean()):.3f}, "
-          f"{np.rad2deg(R.say[sel].mean()):.3f} deg")
+          f"{np.rad2deg(R.sigma_alpha_x[sel].mean()):.3f}, "
+          f"{np.rad2deg(R.sigma_alpha_y[sel].mean()):.3f} deg")
     print(f"  measurement gaps                  : median {np.median(gaps):.3f} s, "
           f"max {gaps.max():.2f} s")
     return R
@@ -302,8 +311,9 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
 def plot_timeseries(R, meas_df, offset, save=None):
     """EKF vs per-frame measurement, with occlusion shading and 2-sigma band."""
     fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
-    for k, (nm, lbl, sg) in enumerate([("ax", r"$\alpha_x$", "sax"),
-                                       ("ay", r"$\alpha_y$", "say")]):
+    for k, (nm, lbl, sg) in enumerate(
+            [("alpha_x", r"$\alpha_x$", "sigma_alpha_x"),
+             ("alpha_y", r"$\alpha_y$", "sigma_alpha_y")]):
         a = axs[k]
         gaps = R.t_cam[R.n == 0].to_numpy()
         for t0 in gaps:
@@ -400,9 +410,9 @@ def animate_camera(records, save, fps=25, trail=40):
             if e:
                 resid = f"  resid {np.mean(e):5.1f} px"
         txt.set_text(f"t = {r['t_cam']:6.2f} s   markers {r['n']}{resid}\n"
-                     f"alpha = ({math.degrees(r['ax']):+6.2f}, "
-                     f"{math.degrees(r['ay']):+6.2f}) deg   "
-                     f"1sig {math.degrees(r['sax']):.2f} deg")
+                     f"alpha = ({math.degrees(r['alpha_x']):+6.2f}, "
+                     f"{math.degrees(r['alpha_y']):+6.2f}) deg   "
+                     f"1sig {math.degrees(r['sigma_alpha_x']):.2f} deg")
         return list(meas_pts.values()) + list(pred_pts.values()) + \
             [center_pt, trail_ln, ell, txt]
 
