@@ -1,6 +1,6 @@
-syms alpha_x  alpha_y
-syms alpha_dot_x alpha_dot_y
-syms alpha_ddot_x alpha_ddot_y
+syms alpha_x  alpha_y  real
+syms alpha_dot_x alpha_dot_y real
+syms alpha_ddot_x alpha_ddot_y real
 
 Q = [alpha_x alpha_dot_x alpha_ddot_x
      alpha_y alpha_dot_y alpha_ddot_y];
@@ -83,18 +83,18 @@ end
 qIdot = ddt(qI, Q) %[output:49d94e0b]
 qIddot = ddt(qIdot, Q) %[output:0b0525ac]
 %%
-syms m_P m_D L g0 T
-syms sddD1 sddD2 sddD3
-syms fx fy fz
+syms m_P m_D L g0 T real
+syms sddD1 sddD2 sddD3 real
+syms fx fy fz real
 
-s_ddot_D = [sddD1; sddD2; sddD3]; % uncoordinated, but cancels out later
-f_vec  = [fx; fy; fz]; % inertial frame (computed by transforming C_Sigma from body to inertial)
-g_vec  = [0; 0; g0]; % inertial frame
+s_ddot_D = [sddD1; sddD2; sddD3]; % body frame, but cancels out later
+f_vec    = [fx; fy; fz]; % inertial frame (computed by transforming C_Sigma from body to inertial)
+g_vec    = [0; 0; g0]; % inertial frame
 
 a_P = s_ddot_D + L*qIddot;
 
 eq1 = m_P*a_P == T*qI - m_P*g_vec;
-eq2 = m_D*s_ddot_D == f_vec - T*qI - m_D*g_vec;
+eq2 = m_D*s_ddot_D ==  f_vec - T*qI - m_D*g_vec;
 
 vars = [alpha_ddot_x; alpha_ddot_y; T; s_ddot_D];
 [A, b] = equationsToMatrix([eq1; eq2], vars);
@@ -106,44 +106,44 @@ T = sol(3) %[output:184b6d58]
 %%
 syms Jxx Jyy Jzz
 
-% Drone states
+%% Drone states
 syms px py pz
 syms vx vy vz
 syms phi theta psi
 syms p q r
 
-% Inputs
+%% Inputs
 syms C_Sigma n1 n2 n3
 
-% Shorthand
-sp = sin(phi); cp = cos(phi);
+%% Shorthand
+sp = sin(phi);   cp = cos(phi);
 st = sin(theta); ct = cos(theta);
-sy = sin(psi); cy = cos(psi);
+sy = sin(psi);   cy = cos(psi);
 
 T_EB = [ct*cy,  sp*st*cy - cp*sy,  cp*st*cy + sp*sy;
         ct*sy,  sp*st*sy + cp*cy,  cp*st*sy - sp*cy;
-        -st, sp*ct, cp*ct];
+        -st,    sp*ct,             cp*ct];
 
 % Thrust acts along body +z, so this is C_Sigma times the third column.
 F_I = T_EB*[0; 0; C_Sigma];
 
 % T = (mP/(mD + mP))*(mD*L*(qIdot.'*qIdot) - qI.'*F_I);
 
-% Translational dynamics
+%% Translational dynamics
 a_D = F_I/m_D - (T*qI)/m_D - g0*[0; 0; 1];
 
-% Euler kinematics
+%% Euler kinematics
 tt = st/ct;
 phi_dot   = p + (sp*q + cp*r)*tt;
 theta_dot = cp*q - sp*r;
 psi_dot   = (sp*q + cp*r)/ct;
 
-% Attitude dynamics
+%% Attitude dynamics (diagonal inertia)
 wx_dot = (n1 - (Jyy - Jzz)*q*r)/Jxx;
 wy_dot = (n2 - (Jzz - Jxx)*p*r)/Jyy;
 wz_dot = (n3 - (Jxx - Jyy)*p*q)/Jzz;
 
-% Drone-side state derivative
+%% Drone-side state derivative (states 1..12)
 xdot_drone = [ vx; vy; vz; %[output:group:2c86f5f3] %[output:2a48970a]
                a_D; %[output:2a48970a]
                phi_dot; theta_dot; psi_dot; %[output:2a48970a]
