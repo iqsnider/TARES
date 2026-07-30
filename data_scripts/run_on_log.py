@@ -1,4 +1,6 @@
 """Run the payload EKF against a real flight log + pose CSV."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import math
@@ -6,7 +8,7 @@ import cv2
 import sim.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
-import runs
+import catalog
 
 G = 9.80665
 
@@ -80,7 +82,9 @@ def mean_nnis(df, warmup=3.0):
     return float(np.mean(m.nis.to_numpy()/(2*m.n.to_numpy())))
 
 
-CALIB_PATH = runs.CALIB
+# default camera calibration; sessions.toml can override it per session
+# default camera; a session can name its own in sessions.toml
+CALIB_PATH = catalog.defaults().get("calibration", "")
 _CALIB_CACHE = {}
 
 
@@ -108,21 +112,33 @@ def make_params(L, L_m=8.31, calib_path=CALIB_PATH, **kw):
 
 
 if __name__ == "__main__":
+    import argparse
     import time
-    import runs
 
-    runs.check()
-    print(f"run: {runs.RUN}\n     {runs.FLIGHT.name}")
-    pose = pd.read_csv(runs.POSE)
-    fl = pd.read_csv(runs.FLIGHT)
-    inp = build_inputs(fl)
-    frames = group_frames(pose)
+    ap = argparse.ArgumentParser(
+        description="Sweep (clock offset, tether length) and report the pair "
+                    "that minimises NIS. Put the winner in sessions.toml.")
+    ap.add_argument("selector", nargs="?", default="latest.cam",
+                    help="which session (see `uv run plot.py ls`)")
+    args = ap.parse_args()
+
+    session = catalog.resolve(args.selector)
+    if not session.has_camera:
+        raise SystemExit(f"session {session.id} has no camera data")
+    print(f"{session.id}  {session.label}")
+    print(f"   currently sessions.toml says pose_offset = "
+          f"{session.pose_offset:+.2f} s")
+
+    inp = build_inputs(session.fl)
+    frames = group_frames(session.poses)
+    calib = Path(session.calibration).expanduser()
+
     t0 = time.time()
     offs = np.arange(-1.0, 2.6, 0.10)
     Ls = np.array([6.5, 7.0, 7.4, 7.8, 8.3])
     table = np.full((len(Ls), len(offs)), np.inf)
     for i, L in enumerate(Ls):
-        prm = make_params(L)
+        prm = make_params(L, calib_path=calib)
         for j, o in enumerate(offs):
             table[i, j] = mean_nnis(run(frames, inp, prm, o))
     print(f"({time.time()-t0:.0f}s)\n{'L_eff':>7} | best offset    min NIS")
@@ -130,5 +146,7 @@ if __name__ == "__main__":
         j = int(np.argmin(table[i]))
         print(f"{L:>7.2f} | {offs[j]:>+10.2f} s {table[i, j]:>10.2f}")
     i, j = np.unravel_index(np.argmin(table), table.shape)
-    print(f"\nBEST: offset {
-          offs[j]:+.2f} s, L_eff {Ls[i]:.2f} m, NIS {table[i, j]:.2f}")
+    print(f"\nBEST: offset {offs[j]:+.2f} s, L_eff {Ls[i]:.2f} m, "
+          f"NIS {table[i, j]:.2f}")
+    print(f"\nrecord it:\n  [sessions.{session.id}]\n"
+          f"  pose_offset = {offs[j]:.2f}")

@@ -13,6 +13,8 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,7 +27,7 @@ import sim.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 from sim.plotting import TimeSlider, configure_plot_style
-import runs
+import catalog
 from run_on_log import build_inputs, group_frames, make_params
 
 configure_plot_style()   # shared serif / Computer Modern theme
@@ -156,6 +158,36 @@ def estimated_payload_enu(records, fl, L_m):
     U = np.interp(tf, t, fl.drone_pz_meas.to_numpy())
     n = np.array([r["n_hat"] for r in records])
     return tf, np.c_[E, N, U] + L_m * n
+
+
+def analyse(session, verbose=True):
+    """Run the payload EKF over a session. Returns what the plots need.
+
+    Everything the filter depends on that is not in the data itself -- the
+    clock offset, the tether lengths, the calibration -- comes off the session
+    (i.e. out of sessions.toml), so there are no paths or constants here.
+    """
+    if not session.has_camera:
+        raise SystemExit(f"session {session.id} has no camera data")
+
+    offset = session.pose_offset
+    params = make_params(session.L_dyn, L_m=session.L_marker,
+                         calib_path=Path(session.calibration).expanduser())
+    inp = build_inputs(session.fl)
+    frames = group_frames(session.poses)
+
+    records = run_full(frames, inp, params, offset)
+    meas_df = direct_measurement(frames, inp, offset)
+    if verbose:
+        print(f"{len(records)} filter steps, "
+              f"{sum(r['n'] > 0 for r in records)} with a measurement")
+    R = summarise(records, meas_df) if verbose else None
+
+    est_t, est = estimated_payload_enu(records, session.fl, session.L_marker)
+    pdf = payload.get_payload_ENU_from_data(session.pose, session.flight,
+                                            time_offset=offset)
+    return dict(records=records, meas_df=meas_df, R=R, est_t=est_t, est=est,
+                pdf=pdf, offset=offset, params=params)
 
 
 def summarise(records, meas_df):
@@ -386,40 +418,36 @@ def animate_camera(records, save, fps=25, trail=40):
 
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
-    # ---- inputs, from the shared run definition in runs.py ----------------
-    POSE, FLIGHT, CALIB = runs.POSE, runs.FLIGHT, runs.CALIB
-    OFFSET = runs.POSE_TIME_OFFSET
-    L_DYN, L_MARKER = runs.L_DYN, runs.L_MARKER
-    runs.check()
+    import argparse
 
-    # ---- outputs, written alongside the run they came from ----------------
-    OUT_DIR = runs.OUT_DIR
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument("selector", nargs="?", default="latest.cam",
+                    help="which session (see `uv run plot.py ls`)")
+    ap.add_argument("--save", metavar="DIR", default=None,
+                    help="write the figures and video here")
+    ap.add_argument("--no-video", action="store_true",
+                    help="skip the camera animation, which is slow")
+    args = ap.parse_args()
 
-    SHOW = True                  # open the figures and video when done
+    session = catalog.resolve(args.selector)
+    note = session.meta.get("note", "")
+    print(f"{session.id}  {session.label}{'  -- ' + note if note else ''}")
 
-    print(f"run: {runs.RUN}\n     {FLIGHT.name}")
+    r = analyse(session)
 
-    pose = pd.read_csv(POSE)
-    fl = pd.read_csv(FLIGHT)
-    inp = build_inputs(fl)
-    frames = group_frames(pose)
-    params = make_params(L_DYN, L_m=L_MARKER, calib_path=CALIB)
+    out = Path(args.save).expanduser() if args.save else None
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
 
-    records = run_full(frames, inp, params, OFFSET)
-    meas_df = direct_measurement(frames, inp, OFFSET)
-    print(f"{len(records)} filter steps, "
-          f"{sum(r['n'] > 0 for r in records)} with a measurement")
-    R = summarise(records, meas_df)
+    plot_3d(session.fl, r["pdf"], r["est_t"], r["est"],
+            save=out and out / f"{session.id}_ekf_3d.png")
+    plot_timeseries(r["R"], r["meas_df"], r["offset"],
+                    save=out and out / f"{session.id}_ekf_timeseries.png")
 
-    est_t, est = estimated_payload_enu(records, fl, L_MARKER)
-    pdf = payload.get_payload_ENU_from_data(POSE, FLIGHT, time_offset=OFFSET)
+    if not args.no_video:
+        mp4 = ((out / f"{session.id}_camera_view.mp4") if out else
+               Path(tempfile.mkdtemp(prefix="tares_")) / "camera_view.mp4")
+        animate_camera(r["records"], mp4)
+        open_file(mp4)
 
-    f3d = plot_3d(fl, pdf, est_t, est, OUT_DIR / "trajectory_3d.png")
-    fts = plot_timeseries(R, meas_df, OFFSET, OUT_DIR / "ekf_timeseries.png")
-    mp4 = animate_camera(records, OUT_DIR / "camera_view.mp4")
-
-    print(f"outputs -> {OUT_DIR}")
-    if SHOW:
-        open_file(mp4)          # video in the default player
-        plt.show()              # figures interactive, so the 3D one can be rotated
+    plt.show()   # interactive, so the 3-D view can be panned

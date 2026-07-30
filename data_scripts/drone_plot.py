@@ -4,20 +4,12 @@ import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
-import glob
-import re
 
-import runs
+import catalog
 from sim.plotting import configure_plot_style
 
 configure_plot_style()   # shared serif / Computer Modern theme
 
-LOG_RE = re.compile(r"^flight_\d{8}_\d{6}\.csv$")
-# searched by --latest; runs.py names the flight under analysis, and its
-# newest log is that run, so a bare `uv run drone_plot.py` lands on it
-DATA_DIR = str(runs.TEST_DIR)
-
-LOG_GLOB = "flight_*.csv"
 G = 9.80665
 MG_TO_MS2 = G/1000
 
@@ -411,35 +403,8 @@ def trajectory_plot_3d(df, save=None):
     if save:
         fig.savefig(save, dpi=110)
 
-def latest_log(data_dir=DATA_DIR):
-    """Return the newest flight_YYYYMMDD_HHMMSS.csv in data_dir (excludes sidecars)."""
-    d = os.path.expanduser(data_dir)
-    files = [os.path.join(d, f) for f in os.listdir(d) if LOG_RE.match(f)]
-    if not files:
-        raise FileNotFoundError(f"no flight_YYYYMMDD_HHMMSS.csv files in {d}")
-    return max(files)
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Post-flight analysis plots.")
-    ap.add_argument("csv", nargs="?", default=None)
-    ap.add_argument("--latest", action="store_true",
-                    help=f"use the newest {LOG_GLOB} in --data-dir")
-    ap.add_argument("--data-dir", default=DATA_DIR,
-                    help="directory searched by --latest")
-    ap.add_argument("--target-hz", type=float, default=50,
-                    help="expected control frequency for the reference line")
-    ap.add_argument("--outdir", default=None,
-                    help="if set, save PNGs here instead of (only) showing")
-    args = ap.parse_args()
-
-    if args.latest or args.csv is None:
-        args.csv = latest_log(args.data_dir)
-        print(f"Using latest log: {args.csv}")
-    elif args.latest and args.csv:
-        ap.error("pass either a csv path or --latest, not both")
-
-
-    df = make_df(args.csv)
+def plot_suite(df, target_hz=50, save=None, stem="flight"):
+    """Every log plot, in one call. `save` is a directory, or None to show."""
     t_takeover, mask = guided_window(df)
     if t_takeover is None:
         print("No manual takeover detected; using full flight.")
@@ -448,20 +413,45 @@ if __name__ == "__main__":
               f"({int(mask.sum())}/{len(df)} samples are GUIDED)")
 
     def out(name):
-        if args.outdir:
-            base = os.path.splitext(os.path.basename(args.csv))[0]
-            return os.path.join(os.path.expanduser(args.outdir), f"{base}_{name}.png")
-        return None
+        if save is None:
+            return None
+        d = os.path.expanduser(str(save))
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"{stem}_{name}.png")
 
     acc_plot(df, mask, t_takeover, save=out("accel"))
     position_plot(df, t_takeover, save=out("position"))
     velocity_plot(df, t_takeover, save=out("velocity"))
     attitude_plot(df, t_takeover, save=out("attitude"))
-    ctrl_freq_plot(df, mask, target_hz=args.target_hz, save=out("ctrlfreq"))
+    ctrl_freq_plot(df, mask, target_hz=target_hz, save=out("ctrlfreq"))
     rc_plot(df, t_takeover, save=out("rc"))
     # servo_plot(df, t_takeover, save=out("servo"))
     trajectory_plot(df, save=out("trajectory"))
     trajectory_plot_3d(df, save=out("trajectory_3d"))
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(
+        description="Post-flight log plots. Takes a session selector "
+                    "(see `uv run plot.py ls`) or a csv path.")
+    ap.add_argument("session", nargs="?", default="latest",
+                    help="session selector, or a path to a flight csv")
+    ap.add_argument("--target-hz", type=float, default=50,
+                    help="expected control frequency for the reference line")
+    ap.add_argument("--outdir", default=None,
+                    help="if set, save PNGs here instead of (only) showing")
+    args = ap.parse_args()
+
+    if os.path.exists(os.path.expanduser(args.session)):
+        path = os.path.expanduser(args.session)
+        stem = os.path.splitext(os.path.basename(path))[0]
+        df = make_df(path)
+    else:
+        s = catalog.resolve(args.session)
+        print(f"{s.id}  {s.label}\n   log  {s.flight}")
+        path, stem, df = s.flight, s.id, s.fl
+
+    plot_suite(df, target_hz=args.target_hz, save=args.outdir, stem=stem)
 
     if not args.outdir:
         plt.show()

@@ -1,0 +1,43 @@
+# What the filenames cannot tell you.
+#
+# catalog.py derives everything it can from the data directory itself. This
+# file holds the rest: clock offsets, geometry, and your own notes. Keys under
+# [sessions.<id>] override [defaults], and reach you as session.<name>:
+#
+#     s = catalog.resolve("0723.last")
+#     s.pose_offset   -> 0.17
+#
+# Add a session by copying a stamp out of `uv run plot.py ls`.
+
+[defaults]
+# pose clock -> flight clock [s]. 0 until measured; find it by minimising NIS
+# over (offset, L) with `uv run run_on_log.py <selector>`.
+pose_offset = 0.0
+# tether length used by the dynamics / from the pivot to the marker board [m]
+L_dyn = 8.0
+L_marker = 8.31
+
+# camera intrinsics, shared by every run flown with this camera
+calibration = "~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json"
+
+
+[sessions.20260723_114556]
+pose_offset = 0.17          # NIS-minimising, mean normalised NIS 1.10
+note = "23 Jul 2026, last test of the day"
+
+
+# ArduPilot SITL, not real flights. These five were filed twice -- under
+# data_06302026/data/ and again under a folder named SITL/ -- and the
+# byte-identical SITL/ copies were deleted, so `sim = true` is now the only
+# thing recording that they came out of the simulator. Filter them out of a
+# listing with `uv run plot.py ls 0630.real`.
+[sessions.20260630_105624]
+sim = true
+[sessions.20260630_111010]
+sim = true
+[sessions.20260630_113409]
+sim = true
+[sessions.20260630_113908]
+sim = true
+[sessions.20260630_122056]
+sim = true

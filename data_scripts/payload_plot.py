@@ -115,14 +115,18 @@ def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
 
 
 if __name__ == "__main__":
-    import runs
+    import sys
+    import catalog
 
-    runs.check()
-    print(f"run: {runs.RUN}\n     {runs.FLIGHT.name}")
+    # any session selector; see `uv run plot.py ls`
+    s = catalog.resolve(sys.argv[1] if len(sys.argv) > 1 else "latest.cam")
+    if not s.has_camera:
+        raise SystemExit(f"session {s.id} has no camera data")
+    print(f"{s.id}  {s.label}\n   cam  {s.pose}   "
+          f"offset {s.pose_offset:+.2f} s")
 
-    payload_df = get_payload_ENU_from_data(
-        runs.POSE, runs.FLIGHT, time_offset=runs.POSE_TIME_OFFSET)
-    drone_df = pd.read_csv(runs.FLIGHT)
+    payload_df = get_payload_ENU_from_data(s.pose, s.flight,
+                                           time_offset=s.pose_offset)
 
-    trajectory_plot_3d_with_payload(drone_df, payload_df)
+    trajectory_plot_3d_with_payload(s.fl, payload_df)
     plt.show()
