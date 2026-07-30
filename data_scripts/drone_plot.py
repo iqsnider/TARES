@@ -7,8 +7,15 @@ import matplotlib.pyplot as plt
 import glob
 import re
 
+import runs
+from sim.plotting import configure_plot_style
+
+configure_plot_style()   # shared serif / Computer Modern theme
+
 LOG_RE = re.compile(r"^flight_\d{8}_\d{6}\.csv$")
-DATA_DIR = "~/TARES_SITL/data"
+# searched by --latest; runs.py names the flight under analysis, and its
+# newest log is that run, so a bare `uv run drone_plot.py` lands on it
+DATA_DIR = str(runs.TEST_DIR)
 
 LOG_GLOB = "flight_*.csv"
 G = 9.80665

@@ -3,7 +3,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from estimation.calculate_payload_position import get_payload_ENU_from_data
+from sim.estimation.calculate_payload_position import get_payload_ENU_from_data
+from sim.plotting import configure_plot_style
+
+configure_plot_style()   # shared serif / Computer Modern theme
 
 G = 9.80665
 MG_TO_MS2 = G/1000
@@ -112,12 +115,14 @@ def trajectory_plot_3d_with_payload(df, payload_df, save=None, tether_every=25):
 
 
 if __name__ == "__main__":
-    payload_pose_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/step_test_with_camera_20260723_114555/poses.csv"
-    flight_data_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/flight_20260723_114556.csv"
+    import runs
+
+    runs.check()
+    print(f"run: {runs.RUN}\n     {runs.FLIGHT.name}")
 
     payload_df = get_payload_ENU_from_data(
-        payload_pose_file, flight_data_file, time_offset=1)
-    drone_df = pd.read_csv(flight_data_file)
+        runs.POSE, runs.FLIGHT, time_offset=runs.POSE_TIME_OFFSET)
+    drone_df = pd.read_csv(runs.FLIGHT)
 
     trajectory_plot_3d_with_payload(drone_df, payload_df)
     plt.show()

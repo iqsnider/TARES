@@ -4,6 +4,7 @@ import os
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.widgets import Slider
 
 from sim.config import TETHER_LEN, GRAVITY, MASS_TOTAL
 import sim.config as config
@@ -127,6 +128,113 @@ def _save(fig, fname, save_dir=FIG_DIR, formats=('png',), dpi=300):
 
 
 # ----------------------------------------------------------------------------
+# Interactive time slider
+# ----------------------------------------------------------------------------
+class TimeSlider:
+    """A slider that reveals trajectory artists only up to the chosen time.
+
+    Build the figure as usual, then register what should follow the slider::
+
+        s = TimeSlider(fig, ts)
+        s.line(drone_line, drone_xyz)       # truncated to t <= slider
+        s.marker(head, drone_xyz)           # rides the last revealed sample
+        s.span(tether, drone_xyz, load_xyz) # joins two points at the time
+        s.group(tether_lines, tether_times) # each shown once its time passes
+
+    Attach it *after* saving, so the written PNG keeps the whole run and only
+    the on-screen figure carries the widget.
+    """
+
+    def __init__(self, fig, t, label='Time [s]', height=0.03, gap=0.09):
+        self.t = np.asarray(t, dtype=float)
+        self._lines = []
+        self._markers = []
+        self._spans = []
+        self._groups = []
+
+        # A layout engine would fight the axes we are about to place, so let it
+        # settle the figure once and then freeze it.
+        if fig.get_layout_engine() is not None:
+            fig.canvas.draw()
+            fig.set_layout_engine('none')
+
+        # carve a strip out of the bottom of the figure for the slider
+        for ax in fig.axes:
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0 + gap,
+                             box.width, box.height - gap])
+
+        self.ax = fig.add_axes([0.18, gap / 3, 0.64, height])
+        self.widget = Slider(self.ax, label, float(self.t[0]),
+                             float(self.t[-1]), valinit=float(self.t[-1]),
+                             color=C_DRONE, initcolor='none')
+        self.widget.on_changed(self._update)
+        # widgets stop responding once garbage collected, so let the figure own it
+        fig.time_slider = self
+
+    def line(self, artist, points, t=None):
+        """Truncate `artist` to the samples of `points` at or before the time."""
+        self._lines.append(self._entry(artist, points, t))
+        return artist
+
+    def marker(self, artist, points, t=None):
+        """Park `artist` on the most recent revealed sample of `points`."""
+        self._markers.append(self._entry(artist, points, t))
+        return artist
+
+    def span(self, artist, a, b, t=None, t_b=None):
+        """Draw `artist` as the segment joining two points that move with time.
+
+        Used for the tether: `a` and `b` are the two ends, each sampled on its
+        own timeline, and the segment always shows where they are right now.
+        """
+        ta = self.t if t is None else np.asarray(t, dtype=float)
+        self._spans.append((artist, np.asarray(a, dtype=float), ta,
+                            np.asarray(b, dtype=float),
+                            ta if t_b is None else np.asarray(t_b, float)))
+        return artist
+
+    def group(self, artists, t):
+        """Show each artist only once the slider passes its own time."""
+        self._groups.append((list(artists), np.asarray(t, dtype=float)))
+        return artists
+
+    def _entry(self, artist, points, t):
+        points = np.asarray(points, dtype=float)
+        return artist, points, self.t if t is None else np.asarray(t, float)
+
+    @staticmethod
+    def _head(t, value):
+        """Index of the last sample of `t` at or before `value`."""
+        return max(int(np.searchsorted(t, value, 'right')), 1) - 1
+
+    @staticmethod
+    def _draw(artist, points):
+        """Push a path onto a 2-D or 3-D line."""
+        if hasattr(artist, 'set_data_3d'):
+            artist.set_data_3d(points[:, 0], points[:, 1], points[:, 2])
+        else:
+            artist.set_data(points[:, 0], points[:, 1])
+
+    def _update(self, value):
+        for artist, points, t in self._lines:
+            self._draw(artist, points[:np.searchsorted(t, value, 'right')])
+        for artist, points, t in self._markers:
+            k = self._head(t, value)
+            self._draw(artist, points[k:k + 1])
+        for artist, a, ta, b, tb in self._spans:
+            # nothing to join until both ends have started
+            artist.set_visible(value >= max(ta[0], tb[0]))
+            if artist.get_visible():
+                self._draw(artist, np.vstack([a[self._head(ta, value)],
+                                              b[self._head(tb, value)]]))
+        for artists, t in self._groups:
+            for artist, t_i in zip(artists, t):
+                artist.set_visible(t_i <= value)
+        self.ax.figure.canvas.draw_idle()
+
+
+# ----------------------------------------------------------------------------
 # Reference target
 # ----------------------------------------------------------------------------
 # A run's reference trajectory is drawn for one body or the other: the payload
@@ -151,10 +259,12 @@ def _body_name(ref_target):
 def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
                        title='Trajectory',
                        save_dir=None, fname='trajectory_3d',
-                       ref_target='payload'):
+                       ref_target='payload', slider=True):
     """3-D drone/payload paths against the reference `P_ref`.
 
     `ref_target` says which body P_ref was drawn for ('payload' or 'drone').
+    With `slider`, the on-screen figure gets a time slider that plays the run
+    back; the figure is saved first, so the PNG always holds the whole run.
     """
     drone = X[:, 0:3]
     sax, say = np.sin(X[:, 12]), np.sin(X[:, 13])
@@ -167,23 +277,34 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
     if title:
         fig.suptitle(title, fontsize=18, fontweight='bold')
 
-    ax.plot(*P_ref.T, color=C_REF, linewidth=1.6, linestyle=(0, (5, 4)),
-            label=f'{_body_name(ref_target)} reference')
-    ax.plot(*drone.T, color=C_DRONE, linewidth=2.0, label='Drone')
-    ax.plot(*payload.T, color=C_PAYLOAD, linewidth=2.0, label='Payload')
+    ref_ln, = ax.plot(*P_ref.T, color=C_REF, linewidth=1.6,
+                      linestyle=(0, (5, 4)),
+                      label=f'{_body_name(ref_target)} reference')
+    drone_ln, = ax.plot(*drone.T, color=C_DRONE, linewidth=2.0, label='Drone')
+    payload_ln, = ax.plot(*payload.T, color=C_PAYLOAD, linewidth=2.0,
+                          label='Payload')
 
     idx = np.linspace(0, len(ts) - 1, n_tethers).astype(int)
+    tethers = []
     for k, i in enumerate(idx):
-        ax.plot([drone[i, 0], payload[i, 0]],
-                [drone[i, 1], payload[i, 1]],
-                [drone[i, 2], payload[i, 2]],
-                color='#5F6368', linewidth=0.9, alpha=0.35,
-                label='Tether (snapshots)' if k == 0 else None)
+        line, = ax.plot([drone[i, 0], payload[i, 0]],
+                        [drone[i, 1], payload[i, 1]],
+                        [drone[i, 2], payload[i, 2]],
+                        color='#5F6368', linewidth=0.9, alpha=0.35,
+                        label='Tether (snapshots)' if k == 0 else None)
+        tethers.append(line)
+
+    # the tether where the slider is; static until a slider is attached
+    live_tether, = ax.plot(*np.vstack([drone[-1], payload[-1]]).T,
+                           color='#3C4043', linewidth=1.8, zorder=4,
+                           label='Tether (at $t$)')
 
     ax.scatter(*drone[0], color='#2CA02C', edgecolors='white', linewidths=0.8,
                marker='^', s=90, depthshade=False, label='Start', zorder=5)
-    ax.scatter(*drone[-1], color='#222222', edgecolors='white', linewidths=0.8,
-               marker='s', s=70, depthshade=False, label='End', zorder=5)
+    head, = ax.plot(*drone[-1:].T, marker='s', markersize=8,
+                    color='#222222', markeredgecolor='white',
+                    markeredgewidth=0.8, linestyle='none', zorder=5,
+                    label='End')
 
     # equal-aspect cube
     all_pts = np.vstack([drone, payload, P_ref])
@@ -212,6 +333,15 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
 
     if save_dir:
         _save(fig, fname, save_dir)
+
+    if slider:
+        s = TimeSlider(fig, ts)
+        s.line(ref_ln, P_ref)
+        s.line(drone_ln, drone)
+        s.line(payload_ln, payload)
+        s.marker(head, drone)
+        s.span(live_tether, drone, payload)
+        s.group(tethers, ts[idx])
     return fig
 
 

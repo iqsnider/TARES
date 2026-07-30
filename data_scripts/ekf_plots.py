@@ -22,9 +22,13 @@ from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
 
 import sim.config as config
-import estimation.calculate_payload_position as payload
-import estimation.ekf as ekfm
+import sim.estimation.calculate_payload_position as payload
+import sim.estimation.ekf as ekfm
+from sim.plotting import TimeSlider, configure_plot_style
+import runs
 from run_on_log import build_inputs, group_frames, make_params
+
+configure_plot_style()   # shared serif / Computer Modern theme
 
 G = 9.80665
 IDS = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]
@@ -88,11 +92,14 @@ def run_full(frames, inp, params, offset):
         C_bn = ekfm.C_nb_enu(r, p_, y).T
         pred = {}
         for mid in IDS:
-            h, H, _ = ekfm.marker_prediction(xi, payload.MARKER_OFFSET[mid],
-                                             C_bn, params)
-            pred[mid] = None if h is None else h
-        h0, H0, _ = ekfm.marker_prediction(xi, 0.0, C_bn, params)
-        S0 = None if H0 is None else H0 @ P @ H0.T
+            h, H, p_c = ekfm.marker_prediction(xi, payload.MARKER_OFFSET[mid],
+                                               C_bn, params)
+            # a marker behind the camera still projects, to a mirrored point
+            pred[mid] = h if p_c[2] > 0 else None
+        h0, H0, p_c0 = ekfm.marker_prediction(xi, 0.0, C_bn, params)
+        S0 = H0 @ P @ H0.T if p_c0[2] > 0 else None
+        if p_c0[2] <= 0:
+            h0 = None
 
         muv = {}
         if meas:
@@ -138,14 +145,17 @@ def direct_measurement(frames, inp, offset):
 
 
 def estimated_payload_enu(records, fl, L_m):
-    """p_payload = p_drone + L_m * n_hat, drone position interpolated."""
+    """p_payload = p_drone + L_m * n_hat, drone position interpolated.
+
+    Returns (t_flight, ENU) so the caller can put the estimate on a timeline.
+    """
     t = fl.cur_time.to_numpy()
-    tf = [r["t_flight"] for r in records]
+    tf = np.array([r["t_flight"] for r in records])
     E = np.interp(tf, t, fl.drone_px_meas.to_numpy())
     N = np.interp(tf, t, fl.drone_py_meas.to_numpy())
     U = np.interp(tf, t, fl.drone_pz_meas.to_numpy())
     n = np.array([r["n_hat"] for r in records])
-    return np.c_[E, N, U] + L_m * n
+    return tf, np.c_[E, N, U] + L_m * n
 
 
 def summarise(records, meas_df):
@@ -187,7 +197,14 @@ def _set_equal_3d(ax, X, Y, Z):
         pass
 
 
-def plot_3d(fl, payload_df, est_enu, save=None):
+def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
+    """Drone/payload/EKF paths in ENU.
+
+    `est_t` is the flight time of each row of `est_enu`. With `slider` the
+    on-screen figure gets a time slider that plays the run back; the saved PNG
+    is written first, so the file always holds the whole flight.
+    """
+    t = fl.cur_time.to_numpy()
     E = fl.drone_px_meas.to_numpy()
     N = fl.drone_py_meas.to_numpy()
     U = fl.drone_pz_meas.to_numpy()
@@ -197,22 +214,30 @@ def plot_3d(fl, payload_df, est_enu, save=None):
 
     fig = plt.figure(figsize=(9.5, 8.5))
     ax = fig.add_subplot(111, projection="3d")
-    ax.plot(E, N, U, color="#4c72b0", lw=1.8, label="drone")
+    drone_ln, = ax.plot(E, N, U, color="#4c72b0", lw=1.8, label="drone")
+    ref_ln = None
     if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(fl.columns):
-        ax.plot(fl.drone_px_ref, fl.drone_py_ref, fl.drone_pz_ref,
-                "k--", lw=1.2, label="reference")
+        ref_ln, = ax.plot(fl.drone_px_ref, fl.drone_py_ref, fl.drone_pz_ref,
+                          "k--", lw=1.2, label="reference")
 
     finite = np.flatnonzero(np.isfinite(pE))
-    for k in finite[::25]:
-        ax.plot([E[k], pE[k]], [N[k], pN[k]], [U[k], pU[k]],
-                color="0.7", lw=0.5, alpha=0.7)
+    tethers = [ax.plot([E[k], pE[k]], [N[k], pN[k]], [U[k], pU[k]],
+                       color="0.7", lw=0.5, alpha=0.7)[0]
+               for k in finite[::25]]
 
-    ax.plot(pE, pN, pU, color="tab:orange", lw=1.0, alpha=0.85,
-            label="payload (camera measurement)")
-    ax.plot(est_enu[:, 0], est_enu[:, 1], est_enu[:, 2],
-            color="tab:red", lw=1.8, label="payload (EKF estimate)")
+    meas_ln, = ax.plot(pE, pN, pU, color="tab:orange", lw=1.0, alpha=0.85,
+                       label="payload (camera measurement)")
+    est_ln, = ax.plot(est_enu[:, 0], est_enu[:, 1], est_enu[:, 2],
+                      color="tab:red", lw=1.8, label="payload (EKF estimate)")
+
+    # the tether where the slider is; static until a slider is attached
+    live_tether, = ax.plot([E[-1], est_enu[-1, 0]], [N[-1], est_enu[-1, 1]],
+                           [U[-1], est_enu[-1, 2]], color="0.3", lw=1.6,
+                           label="tether (at t)")
 
     ax.scatter([E[0]], [N[0]], [U[0]], c="k", s=40, label="start")
+    head, = ax.plot([E[-1]], [N[-1]], [U[-1]], "s", ms=7, color="k",
+                    mec="white", mew=0.8, label="drone at t")
     ax.set_xlabel("East [m]")
     ax.set_ylabel("North [m]")
     ax.set_zlabel("Up [m]")
@@ -226,14 +251,27 @@ def plot_3d(fl, payload_df, est_enu, save=None):
     if save:
         fig.savefig(save, dpi=120)
         print("wrote", save)
+
+    if slider:
+        s = TimeSlider(fig, t, label="flight time [s]")
+        s.line(drone_ln, np.c_[E, N, U])
+        s.line(meas_ln, np.c_[pE, pN, pU], payload_df.cur_time.to_numpy())
+        s.line(est_ln, est_enu, est_t)
+        s.marker(head, np.c_[E, N, U])
+        # to the EKF estimate, the one payload track with no detection gaps
+        s.span(live_tether, np.c_[E, N, U], est_enu, t_b=est_t)
+        s.group(tethers, t[finite[::25]])
+        if ref_ln is not None:
+            s.line(ref_ln, fl[["drone_px_ref", "drone_py_ref",
+                               "drone_pz_ref"]].to_numpy())
     return fig
 
 
 def plot_timeseries(R, meas_df, offset, save=None):
     """EKF vs per-frame measurement, with occlusion shading and 2-sigma band."""
     fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
-    for k, (nm, lbl, sg) in enumerate([("ax", "alpha_x", "sax"),
-                                       ("ay", "alpha_y", "say")]):
+    for k, (nm, lbl, sg) in enumerate([("ax", r"$\alpha_x$", "sax"),
+                                       ("ay", r"$\alpha_y$", "say")]):
         a = axs[k]
         gaps = R.t_cam[R.n == 0].to_numpy()
         for t0 in gaps:
@@ -245,7 +283,8 @@ def plot_timeseries(R, meas_df, offset, save=None):
         a.fill_between(R.t_cam,
                        np.rad2deg(R[nm] - 2*R[sg]),
                        np.rad2deg(R[nm] + 2*R[sg]),
-                       color="tab:red", alpha=0.2, label="EKF 2-sigma")
+                       color="tab:red", alpha=0.2,
+                       label=r"EKF $2\sigma$")
         a.set_ylabel(f"{lbl} [deg]")
         a.grid(alpha=0.3)
         a.legend(fontsize=8, loc="upper right")
@@ -291,23 +330,25 @@ def animate_camera(records, save, fps=25, trail=40):
                   bbox=dict(fc="white", alpha=0.8, ec="0.8"))
     hist = []
 
+    def _at(artist, uv):
+        """Put a single-point artist on `uv`, or clear it when there is none."""
+        if uv is None:
+            artist.set_data([], [])
+        else:
+            artist.set_data([uv[0]], [uv[1]])
+
     def update(i):
         r = records[i]
         for mid in IDS:
-            z = r["meas"].get(mid)
-            if z is not None:
-                meas_pts[mid].set_data([z[0]], [z[1]])
-            else:
-                meas_pts[mid].set_data([], [])
-            p = r["pred"][mid]
-            if p is not None:
-                pred_pts[mid].set_data([p[0]], [p[1]])
-            else:
-                pred_pts[mid].set_data([], [])
+            # measured dots follow the detections; the predicted x always shows
+            # where the filter thinks each marker is, detected or not
+            _at(meas_pts[mid], r["meas"].get(mid))
+            _at(pred_pts[mid], r["pred"][mid])
 
         c = r["pred_c"]
+        _at(center_pt, c)
+        ell.set_visible(c is not None)
         if c is not None:
-            center_pt.set_data([c[0]], [c[1]])
             hist.append(c)
             del hist[:-trail]
             hh = np.array(hist)
@@ -345,31 +386,19 @@ def animate_camera(records, save, fps=25, trail=40):
 
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
-    from pathlib import Path
-
-    # ---- inputs -----------------------------------------------------------
-    DATA_DIR = Path(
-        "~/TARES_SITL/data/test_07232026/all_data_07232026").expanduser()
-    RUN = "step_test_with_camera_20260723_114555"
-
-    POSE = DATA_DIR / RUN / "poses.csv"
-    FLIGHT = DATA_DIR / "flight_20260723_114556.csv"
-    CALIB = Path("~/TARES_SITL/src/payload_tracking/"
-                 "camera_calibration/calibration.json").expanduser()
+    # ---- inputs, from the shared run definition in runs.py ----------------
+    POSE, FLIGHT, CALIB = runs.POSE, runs.FLIGHT, runs.CALIB
+    OFFSET = runs.POSE_TIME_OFFSET
+    L_DYN, L_MARKER = runs.L_DYN, runs.L_MARKER
+    runs.check()
 
     # ---- outputs, written alongside the run they came from ----------------
-    OUT_DIR = DATA_DIR / RUN / "ekf"
+    OUT_DIR = runs.OUT_DIR
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ---- settings ---------------------------------------------------------
-    # s, pose clock -> flight clock (NIS-minimising)
-    OFFSET = 0.17
-    L_DYN, L_MARKER = 8.0, 8.31  # tether length for dynamics / to marker board
     SHOW = True                  # open the figures and video when done
 
-    for p in (POSE, FLIGHT, CALIB):
-        if not p.exists():
-            raise FileNotFoundError(p)
+    print(f"run: {runs.RUN}\n     {FLIGHT.name}")
 
     pose = pd.read_csv(POSE)
     fl = pd.read_csv(FLIGHT)
@@ -383,10 +412,10 @@ if __name__ == "__main__":
           f"{sum(r['n'] > 0 for r in records)} with a measurement")
     R = summarise(records, meas_df)
 
-    est = estimated_payload_enu(records, fl, L_MARKER)
+    est_t, est = estimated_payload_enu(records, fl, L_MARKER)
     pdf = payload.get_payload_ENU_from_data(POSE, FLIGHT, time_offset=OFFSET)
 
-    f3d = plot_3d(fl, pdf, est, OUT_DIR / "trajectory_3d.png")
+    f3d = plot_3d(fl, pdf, est_t, est, OUT_DIR / "trajectory_3d.png")
     fts = plot_timeseries(R, meas_df, OFFSET, OUT_DIR / "ekf_timeseries.png")
     mp4 = animate_camera(records, OUT_DIR / "camera_view.mp4")
 

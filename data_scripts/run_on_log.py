@@ -4,8 +4,9 @@ import pandas as pd
 import math
 import cv2
 import sim.config as config
-import estimation.calculate_payload_position as payload
-import estimation.ekf as ekfm
+import sim.estimation.calculate_payload_position as payload
+import sim.estimation.ekf as ekfm
+import runs
 
 G = 9.80665
 
@@ -79,7 +80,7 @@ def mean_nnis(df, warmup=3.0):
     return float(np.mean(m.nis.to_numpy()/(2*m.n.to_numpy())))
 
 
-CALIB_PATH = "~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json"
+CALIB_PATH = runs.CALIB
 _CALIB_CACHE = {}
 
 
@@ -107,10 +108,13 @@ def make_params(L, L_m=8.31, calib_path=CALIB_PATH, **kw):
 
 
 if __name__ == "__main__":
-    import sys
     import time
-    pose = pd.read_csv('/mnt/user-data/uploads/poses.csv')
-    fl = pd.read_csv('/mnt/user-data/uploads/flight_20260723_114556.csv')
+    import runs
+
+    runs.check()
+    print(f"run: {runs.RUN}\n     {runs.FLIGHT.name}")
+    pose = pd.read_csv(runs.POSE)
+    fl = pd.read_csv(runs.FLIGHT)
     inp = build_inputs(fl)
     frames = group_frames(pose)
     t0 = time.time()

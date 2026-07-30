@@ -153,19 +153,26 @@ def get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=0
 
 
 if __name__ == "__main__":
-    payload_pose_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/step_test_with_camera_20260723_114555/poses.csv"
-    flight_data_file = "~/TARES_SITL/data/test_07232026/all_data_07232026/flight_20260723_114556.csv"
+    # 23 Jul 2026, last test of the day. data_scripts/runs.py is the shared
+    # definition; spelled out here so this file stays runnable on its own.
+    RUN_DIR = "~/TARES_SITL/data/test_07232026/all_data_07232026"
+    payload_pose_file = f"{RUN_DIR}/step_test_with_camera_20260723_114555/poses.csv"
+    flight_data_file = f"{RUN_DIR}/flight_20260723_114556.csv"
+    TIME_OFFSET = 0.17   # pose clock -> flight clock, NIS-minimising
+
     payload_df = pd.read_csv(payload_pose_file)
     drone_df = pd.read_csv(flight_data_file)
 
     example_frame = payload_df[payload_df.frame == 348]
-    example_position_attitude = get_attitude_at(drone_df, example_frame.time_s.iloc[0], time_offset=1)
+    example_position_attitude = get_attitude_at(drone_df, example_frame.time_s.iloc[0],
+                                                time_offset=TIME_OFFSET)
 
     payload_center_in_camera_frame = get_payload_center_in_camera_frame(example_frame)
     payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame)
     payload_center_in_inertial_frame = get_payload_center_in_inertial_frame(payload_center_in_drone_frame, example_position_attitude)
 
     # test out data
-    payload_enu_data = get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=1)
+    payload_enu_data = get_payload_ENU_from_data(payload_pose_file, flight_data_file,
+                                                 time_offset=TIME_OFFSET)
     print(payload_enu_data)
 
