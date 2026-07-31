@@ -1,11 +1,15 @@
 #import "@preview/cetz:0.3.4": canvas, draw, matrix
 #import draw: *
 
+#set math.equation(numbering: "(1)")
+#set page(margin: 50pt)
+#set text(size: 11pt)
+
 #let defs(body) = block(
   inset: (left: 1.3em), above: 0.55em, below: 1.0em,
   text(size: 8.8pt, fill: rgb("#333333"), body))
+#let darkgreen = rgb("#008000")
 
-= The Model
 #let mp = $m_P$
 #let ap = $underline(a)_P$
 #let gu = $underline(g)$
@@ -28,13 +32,34 @@
 #let ddotq = $dot.double(underline(q))$
 #let Omegau = $underline(Omega)$
 
+// ekf variables
+#let atantwo = math.op("atan2")
+
+#let argmin = math.op("arg min", limits: true)
+#let Lm = $L_"m"$
+#let sdet = $sigma_"det"$
+#let sth = $sigma_theta$
+#let ax = $alpha_x$
+#let ay = $alpha_y$
+#let dax = $dot(alpha)_x$
+#let day = $dot(alpha)_y$
+#let psip = $psi_P$
+#let xihat = $hat(xi)$
 
 
-
-$ mp ap = T qu - mp gu $
+#block(
+  stroke: 1pt + red, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
+= UAV Swing Payload Model
+#v(0.5cm)
+  $ mp ap = T qu - mp gu $
 $ md ad = fu - T qu - md gu $
-$ ddt(omegaBE) = (JBB)^(-1)[nB - OmegaBE JBB omegaBE] $
+$ underline(ddt("")omega^(B E)) = (JBB)^(-1)[nB - OmegaBE JBB omegaBE] $
 $ sp = sd - L qu $
+
 // $ ap = ddotsp $
 // $ ad = ddotsd $
 // $ dotq = skew(omegau) qu $
@@ -47,16 +72,16 @@ $ sp = sd - L qu $
 //
 // $ arrow.double.r T = frac(fu/md - L (dot(Omegau)qu - norm(omegau)^2 qu), qu(1/md + 1/mp)) $
 
-=== swing angles
-
+=== Swing angles
 #v(0.5cm)
 #align(center)[
 #canvas({
   // Set up the transformation matrix
-  ortho(x: -70deg, y: 0deg, z: -120deg, {
+  ortho(x: -70deg, y: 0deg, z: -110deg, {
     let axis-style = (stroke: black, mark: (end: ">", fill: black, scale: 0.5))
     let red-style = (stroke: red + 1.5pt, mark: (end: ">", fill: red, scale: 0.5))
     let blue-style = (stroke: blue + 1.5pt, mark: (end: ">", fill: blue, scale: 0.5))
+    let green-style = (stroke: green + 1.5pt, mark: (end: ">", fill: green, scale: 0.5))
 
     // Coordinate axes arrows
     line((0, 0, 0), (3, 0, 0), ..axis-style)
@@ -72,6 +97,8 @@ $ sp = sd - L qu $
     // vectors of interest
     line((0, 0, 0), (2, 0, -2), ..red-style)
     line((0, 0, 0), (0, 2, -2), ..blue-style)
+    line((0, 0, 0), (2, 2, -2), ..green-style)
+    content((2.3, 2.3, -2.3), text(fill: green)[$[underline(q)]^I$])
 
     // shaded planes
     line((0, 0, 0), (3, 0, 0), (3, 0, -3), (0, 0, -3),
@@ -105,31 +132,28 @@ $ sp = sd - L qu $
   })
 })
 ]
+$ [qu]^I = mat(cos alpha_x, 0, -sin alpha_x; 0, 1, 0; sin alpha_x, 0, cos alpha_x) mat(1, 0, 0; 0, cos alpha_y, -sin alpha_y; 0, sin alpha_y, cos alpha_y) [-underline(3)^I]^I = vec(sin alpha_x cos alpha_y, sin alpha_y, -cos alpha_x cos alpha_y) approx vec(alpha_x, alpha_y, -1) $
+]
 
-== EKF
-#let atantwo = math.op("atan2")
-#let argmin = math.op("arg min", limits: true)
-#let Lm = $L_"m"$
-#let sdet = $sigma_"det"$
-#let sth = $sigma_theta$
-#let ax = $alpha_x$
-#let ay = $alpha_y$
-#let dax = $dot(alpha)_x$
-#let day = $dot(alpha)_y$
-#let psip = $psi_P$
-#let xihat = $hat(xi)$
+#block(
+  stroke: 1pt + darkgreen, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
+
+== ArUco Marker Tracking EKF
 
 === Frames
 
-$
-[dot.c]^I : "ENU" quad (+x "East", +y "North", +z "Up")\
-[dot.c]^B : "body" quad (+x "starboard", +y "nose", +z "up")\
-[dot.c]^C : "camera" quad (+x "right", +y "down", +z "optical axis")
-$
 
 $
-Pi = mat(0, 1, 0; 1, 0, 0; 0, 0, -1) 
+[dot.c]^I : "ENU" quad (+x "East", +y "North", +z "Up")\
+[dot.c]^B : "body" quad (+x "nose", +y "portside", +z "up")\
+[dot.c]^C : "camera" quad (+x "right", +y "up", +z "optical axis")
 $
+
+
 
 
 === State
@@ -145,9 +169,17 @@ $
 #defs[
   $ax, ay$: tether swing angles, tipping toward $+x^I$ (East) and $+y^I$ (North) $quad$ [rad]\
   $dax, day$: swing rates $quad$ [rad/s]\
-  $psip$: payload yaw: marker-row direction, from $+x^I$ toward $+y^I$ $quad$ [rad]\
+  $psip$: payload yaw: marker-row direction $quad$ [rad]\
 ]
 
+]
+
+#block(
+  stroke: 1pt + darkgreen, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
 === Input
 
 $
@@ -158,56 +190,77 @@ $
 )
 $
 
-$
-[C]^(I B) = Pi thin [T]^(I B) thin Pi
-$
-
-$
-[a_s]^I = vec(a_1, a_2, a_3) = [C]^(I B) thin Pi (g / 1000 [a_s]^B_"NED"), quad quad [a_s]^I_"hover" = vec(0, 0, g)
-$
-
-#defs[
-  $[a_s]^I$: specific force
+#defs[Euler angles: $quad$
+  $phi$: roll $quad$
+  $theta$: pitch $quad$
+  $psi$: yaw
 ]
 
-=== Process
+$ [ad]^I = vec(a_1, a_2, a_3) = [T]^(I B) [ad]^B $
+
+
+#defs[
+  $[ad]^I$: acceleration inputs from the drone $quad$ [m/ s$""^2$]
+]
+
+
+=== Process model
 
 $
-[dot(xi)]^I = f(xi, a_s) = vec(
+[dot(xi)]^I = f(xi, a) = vec(
   dax,
   day,
   - (c_x a_1 + s_x a_3) / (L c_y) + 2 s_y / c_y dax day,
   - (c_y a_2 + s_y (c_x a_3 - s_x a_1)) / L - s_y c_y dax^2,
   0
 )
-$
-
-$
-F = (partial f) / (partial xi) = mat(
-  0, 0, 1, 0, 0;
-  0, 0, 0, 1, 0;
-  (s_x a_1 - c_x a_3) / (L c_y),
-    - ((c_x a_1 + s_x a_3) s_y) / (L c_y^2) + (2 dax day) / c_y^2,
-    (2 s_y) / c_y day,
-    (2 s_y) / c_y dax,
-    0;
-  (s_y (c_x a_1 + s_x a_3)) / L,
-    (s_y a_2 - c_y (c_x a_3 - s_x a_1)) / L - cos(2 ay) dax^2,
-    -2 s_y c_y dax,
-    0,
-    0;
-  0, 0, 0, 0, 0
-)
-$
+ approx vec(dot(alpha)_x, dot(alpha)_y, -1/L (a_1 + alpha_x norm(g)), -1/L (a_2 + alpha_y norm(g)), 0) $
 
 #defs[
-  $L$: pivot to payload CG [m]\
-  $F in RR^(5 times 5)$: process Jacobian (continuous-time)
+$L$: drone tether-pivot to payload CG [m]\
 ]
 
-=== Predict
+$ F = mat(0, 0, 1, 0, 0;
+          0, 0, 0, 1, 0;
+          -norm(g)/L, 0,0,0,0;
+          0, -norm(g)/L, 0,0,0;
+        0,0,0,0,0) $
 
-Converting Jacobian to discrete-time w/ RK4
+
+#defs[
+  $F in RR^(5 times 5)$: process Jacobian (continuous-time)
+]
+]
+#block(
+  stroke: 1pt + darkgreen, 
+  inset: 10pt, 
+  radius: 4pt, 
+  fill: gray.lighten(80%)
+)[
+=== Prediction
+Jacobian to discrete-time conversion w/ Euler integration.
+$
+xihat_(k+1)^- = xihat_k^+ + Delta t thin f(xihat_k^+, a_s)
+$
+$
+Phi_k = I_5 + F Delta t, quad quad
+Q = "diag"(0, 0, q, q, q_psi) Delta t
+$
+$
+P_(k+1)^- = Phi_k P_k^+ Phi_k^top + Q
+$
+#defs[
+  $Delta t$: time step [s]\
+  $xihat_k^-, xihat_k^+$: estimate before \& after the update at step $k$\
+  $P_k^-, P_k^+ in RR^(5 times 5)$: covariance before \& after\
+  $Phi_k$: discrete time Jacobian\
+  $q$: process-noise intensity
+]
+]
+
+#v(0.5cm)
+#text(size: 9pt)[
+Shelving Jacobian to discrete-time conversion w/ RK4 for now.
 $
 k_1 &= f(xihat_k^+, a_s), quad
 k_2 = f(xihat_k^+ + (Delta t) / 2 k_1, a_s)\
@@ -235,30 +288,36 @@ $
   $Phi_k$: discrete time Jacobian\
   $q$: process-noise intensity
 ]
+]
 
+
+#block(
+  stroke: 1pt + darkgreen, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
 === Geometry
 
 $
-[hat(n)]^I = vec(s_x c_y, s_y, -c_x c_y), quad
-[hat(m)]^I = vec(cos psip, sin psip, 0), quad "assuming no roll, pitch"
+[underline(m)]^I = vec(cos psip, sin psip, 0), quad "assuming no roll or pitch"
 $
 
 
 #defs[
-  $[hat(n)]^I$: unit vector, tether pivot $arrow$ payload \
-  $[hat(m)]^I$: unit vector along the marker row \
+  $[underline(m)]^I$: unit vector along the marker row \
 ]
 
-=== Measurement, $j in V_k$
+=== Measurement model, $j in V_k$
 
 $
-[p_j]^I = Lm [hat(n)]^I - o_j [hat(m)]^I
+[p_j]^I = Lm [qu]^I - o_j [underline(m)]^I
 $
 
 #defs[
   $V_k$: marker IDs detected in frame $k$\
-  $Lm$: pivot to marker-board center\
-  $o_j$: signed marker offset from center along the row, +left\
+  $Lm$: drone tether-pivot to marker-board CG\
+  $o_j$: marker offset from center along the row, +left\
   $[p_j]^I$: position of marker j
 ]
 
@@ -299,6 +358,7 @@ $
   $[ell]^B, [t_(B C)]^B$ are constant
 ]
 
+]
 
 === Update
 
