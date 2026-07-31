@@ -54,20 +54,20 @@ $ sp = sd - L qu $
 #canvas({
   // Set up the transformation matrix
   ortho(x: -70deg, y: 0deg, z: -120deg, {
-    let axis-style = (stroke: black, mark: (end: "stealth", fill: black, scale: 0.5))
+    let axis-style = (stroke: black, mark: (end: "square", fill: black, scale: 0.5))
     let red-style = (stroke: red + 1.5pt, mark: (end: "stealth", fill: red, scale: 0.5))
     let blue-style = (stroke: blue + 1.5pt, mark: (end: "stealth", fill: blue, scale: 0.5))
 
     // Coordinate axes arrows
     line((0, 0, 0), (3, 0, 0), ..axis-style)
     line((0, 0, 0), (0, 3, 0), ..axis-style)
-    line((0, 0, 0), (0, 0, 3), ..axis-style)
+    line((0, 0, 0), (0, 0, 2), ..axis-style)
     line((0, 0, 0), (0, 0, -3), stroke: (dash: "dashed"))
 
     // Position content on specific 3D axes points
     content((3.5, 0, 0), [$underline(1)^I$])
     content((0, 3.5, 0), [$underline(2)^I$])
-    content((0, 0, 3.5), [$underline(3)^I$])
+    content((0, 0, 2.5), [$underline(3)^I$])
 
     // vectors of interest
     line((0, 0, 0), (2, 0, -2), ..red-style)
