@@ -54,9 +54,9 @@ $ sp = sd - L qu $
 #canvas({
   // Set up the transformation matrix
   ortho(x: -70deg, y: 0deg, z: -120deg, {
-    let axis-style = (stroke: black, mark: (end: "square", fill: black, scale: 0.5))
-    let red-style = (stroke: red + 1.5pt, mark: (end: "stealth", fill: red, scale: 0.5))
-    let blue-style = (stroke: blue + 1.5pt, mark: (end: "stealth", fill: blue, scale: 0.5))
+    let axis-style = (stroke: black, mark: (end: ">", fill: black, scale: 0.5))
+    let red-style = (stroke: red + 1.5pt, mark: (end: ">", fill: red, scale: 0.5))
+    let blue-style = (stroke: blue + 1.5pt, mark: (end: ">", fill: blue, scale: 0.5))
 
     // Coordinate axes arrows
     line((0, 0, 0), (3, 0, 0), ..axis-style)
@@ -89,7 +89,7 @@ $ sp = sd - L qu $
           arc((0, 0), start: -90deg, stop: -45deg, radius: 1.2,
               anchor: "origin",
               stroke: red,
-              mark: (end: "stealth", fill: red, scale: 0.5))
+              mark: (end: ">", fill: red, scale: .5))
           content((0.6, -1.4), text(fill: red)[$alpha_x$])
         })
 
@@ -97,7 +97,7 @@ $ sp = sd - L qu $
           arc((0, 0), start: 180deg, stop: 135deg, radius: 1.2,
               anchor: "origin",
               stroke: blue,
-              mark: (end: "stealth", fill: blue, scale: 0.5))
+              mark: (end: ">", fill: blue, scale: 0.5))
           content((-1.4, 0.6), text(fill: blue)[$alpha_y$])
         })
 
