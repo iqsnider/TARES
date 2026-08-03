@@ -1,14 +1,25 @@
 """
-EKF for tracking a swinging payload from ArUco marker bearings.
+EKF for tracking a swinging payload.
 
-Pre-processing hands the filter unit line-of-sight vectors in the camera
-frame, so nothing here touches pixels, intrinsics, or distortion. The
-geometry is otherwise unchanged: each marker is predicted individually,
-including L_m, the pivot and camera lever arms, and the marker offset o_j.
+Pre-processing does all the camera work: PnP on the three ArUco markers, the
+board center, and the marker-row orientation. What reaches the filter is the
+payload center in the camera frame and (optionally) the marker rotation.
 
-    z_j = [b_x, b_y] for marker j, unit bearing in the camera frame
+    z = [b_x, b_y, psi_P]
 
-    h_j = first two components of [p_j]^C / ||[p_j]^C||
+    b       unit line of sight from the tether pivot to the payload,
+            camera frame. Only the first two components are used, the
+            third is redundant since ||b|| = 1
+    psi_P   payload yaw, inertial frame
+
+Small-angle model throughout, with n = 1:
+
+    [q]^I = [alpha_x, alpha_y, -1],   A = C_CB C_BI
+
+    h(xi) = [ (A [q]^I)_x, (A [q]^I)_y, psi_P ]
+
+so h is LINEAR in xi and H is constant within a timestep. Bearing bias from
+the truncation is about alpha^3/6, under a milliradian below 10 deg of swing.
 
 Camera frame is the OpenCV convention config.CAM_R assumes:
 +x right, +y DOWN, +z along the optical axis.
@@ -17,7 +28,6 @@ import math
 import numpy as np
 
 import sim.config as config
-import sim.estimation.calculate_payload_position as payload
 
 
 # NED <-> ENU swap
@@ -28,6 +38,17 @@ P_SWAP = np.array([[0, 1, 0],
 # xi_I = [alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, psi_p]
 STATE_DIM = 5
 IX_ALPHA_X, IX_ALPHA_Y, IX_ALPHA_DOT_X, IX_ALPHA_DOT_Y, IX_PSI_P = range(STATE_DIM)
+
+# z = [b_x, b_y, psi_p]
+MEAS_DIM = 3
+IX_B_X, IX_B_Y, IX_PSI_MEAS = range(MEAS_DIM)
+
+
+def wrap_pi(a):
+    """
+    Wrap an angle to (-pi, pi]
+    """
+    return math.atan2(math.sin(a), math.cos(a))
 
 
 def C_IB_from_euler(phi, theta, psi):
@@ -52,43 +73,20 @@ def C_IB_enu(phi, theta, psi):
 
 def q_I(alpha_x, alpha_y):
     """
-    [q]^I: UNIT vector from pivot toward the payload, INERTIAL frame
-    """
-    return np.array([alpha_x, alpha_y, -1])
+    [q]^I: small-angle vector from pivot toward the payload, INERTIAL frame.
 
-
-def dq_I_dalpha(alpha_x, alpha_y):
+    Not normalised: ||[q]^I|| = sqrt(1 + alpha_x^2 + alpha_y^2), taken as 1
     """
-    d [q]^I / d(alpha_x, alpha_y)
-    """
-    return np.array([[1,0],[0,1],[0,0]])
-
-
-def m_I(psi_p):
-    """
-    [m]^I: unit vector along the marker row, INERTIAL frame (horizontal)
-    """
-    return np.array([math.cos(psi_p),
-                     math.sin(psi_p),
-                     0])
-
-
-def dm_I_dpsi_p(psi_p):
-    """
-    d [m]^I / d psi_p, 3X1 matrix
-    """
-    return np.array([-math.sin(psi_p),
-                     math.cos(psi_p),
-                     0])
+    return np.array([alpha_x, alpha_y, -1.0])
 
 
 def alpha_from_q_I(q):
     """
-    Returns (alpha_x, alpha_y) from any pivot->payload vector
-    expressed in the inertial frame. Used primarily for initialization
+    Returns (alpha_x, alpha_y) from any pivot->payload vector expressed in
+    the inertial frame. Used primarily for initialization
     """
     q = np.asarray(q, dtype=float)
-    q = q / np.linalg.norm(q)
+    q = q/np.linalg.norm(q)
     alpha_y = math.asin(np.clip(q[1], -1, 1))
     alpha_x = math.atan2(q[0], -q[2])
 
@@ -101,18 +99,17 @@ class EKFParams:
     """
 
     def __init__(self,
-                 L=None, # tether length for DYNAMICS [m]
-                 L_m=None, # pivot -> marker board center [m]
+                 L=None, # tether pivot -> payload CG [m]
                  C_BC=None, # camera -> body
                  t_BC_B=None, # camera optical center in body [m]
                  l_B=None, # tether pivot in body frame [m]
                  q_alpha=(0.02)**2, # process noise on alpha_ddot
                  q_psi_p=(0.3)**2, # process noise on psi_p
-                 sigma_bearing=math.radians(0.04), # marker bearing noise [rad]
-                 sigma_att=math.radians(0.5)): # attitude 1-sigma [rad]
+                 sigma_bearing=math.radians(0.05), # bearing noise [rad]
+                 sigma_yaw=math.radians(3.0), # payload yaw noise [rad]
+                 sigma_att=math.radians(0.5)): # drone attitude 1-sigma [rad]
 
         self.L = config.TETHER_LEN if L is None else L
-        self.L_m = self.L if L_m is None else L_m
         self.C_BC = config.CAM_R if C_BC is None else np.asarray(C_BC, float)
         self.C_CB = self.C_BC.T
         self.t_BC_B = (np.array([config.CAM_OFFSET_X,
@@ -123,19 +120,56 @@ class EKFParams:
         self.q_alpha = q_alpha
         self.q_psi_p = q_psi_p
         self.sigma_bearing = sigma_bearing
+        self.sigma_yaw = sigma_yaw
         self.sigma_att = sigma_att
 
     def bearing_variance(self):
         """
-        Detection noise plus attitude error, as an angle [rad^2]
+        Bearing noise plus drone attitude error [rad^2]
         """
         return self.sigma_bearing**2 + self.sigma_att**2
+
+    def yaw_variance(self):
+        """
+        Payload yaw noise plus drone attitude error [rad^2]
+        """
+        return self.sigma_yaw**2 + self.sigma_att**2
+
+
+def bearing_from_p_C(p_C_payload, params):
+    """
+    Payload center in the camera frame -> unit line of sight FROM THE TETHER
+    PIVOT, still in the camera frame.
+
+    Shifts the origin camera -> body -> pivot, then normalises
+    """
+    p_B = params.C_BC @ np.asarray(p_C_payload, float) + params.t_BC_B
+    p_C = params.C_CB @ (p_B - params.l_B)
+
+    return p_C/np.linalg.norm(p_C)
+
+
+def yaw_from_C_CM(C_CM, C_IB, params):
+    """
+    Payload yaw from the PnP marker rotation. First column of C_CM is the
+    marker row direction in the camera frame
+    """
+    m_I = C_IB @ (params.C_BC @ np.asarray(C_CM, float)[:, 0])
+
+    return math.atan2(m_I[1], m_I[0])
 
 
 def xi_dot_I(xi, f_I, L):
     """
-    process model
-    f_I is specific force in the inertial frame
+    Small-angle process model
+
+    [alpha_dot_x,
+     alpha_dot_y,
+     -(a_1 + alpha_x |g|)/L,
+     -(a_2 + alpha_y |g|)/L,
+     0]
+
+    f_I is specific force in the inertial frame, so m_D is already folded in
     """
     alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
     g = config.GRAVITY
@@ -172,43 +206,23 @@ def euler_step(xi, f_I, dt, L):
     return xi + dt*xi_dot_I(xi, f_I, L)
 
 
-def marker_prediction(xi, o_j, C_BI, params):
+def measurement_prediction(xi, C_BI, params):
     """
-    Predicted bearing h_j and Jacobian H_j for one marker.
+    Predicted measurement h and Jacobian H for one camera frame.
 
-    xi: payload state xi_I
-    o_j: MARKER_OFFSET[marker_id], signed, along the marker row [m]
-    C_BI: rotation to body from inertial
-    params: EKFParams
+    h = [q^C_x, q^C_y, psi_p], H is 3X5 and constant within the timestep
     """
     alpha_x, alpha_y, _, _, psi_p = xi
-    q = q_I(alpha_x, alpha_y)
-    m = m_I(psi_p)
+    A = params.C_CB @ C_BI
+    q_C = A @ q_I(alpha_x, alpha_y)
 
-    # marker position relative to the pivot, inertial frame
-    p_I_j = params.L_m*q - o_j*m
+    h = np.array([q_C[0], q_C[1], psi_p])
 
-    # expressed in body, then relative to the camera, then in camera frame
-    p_B_j = params.l_B + C_BI @ p_I_j - params.t_BC_B
-    p_C_j = params.C_CB @ p_B_j
+    H = np.zeros((MEAS_DIM, STATE_DIM))
+    H[0:2, IX_ALPHA_X:IX_ALPHA_Y+1] = A[0:2, 0:2]
+    H[IX_PSI_MEAS, IX_PSI_P] = 1
 
-    X_j, Y_j, Z_j = p_C_j
-    rho = math.sqrt(X_j**2 + Y_j**2 + Z_j**2)
-
-    h_j = np.array([X_j/rho, Y_j/rho])
-
-    # d h_j / d p_C_j
-    dh_dpC = np.array([[rho**2 - X_j**2, -X_j*Y_j, -X_j*Z_j],
-                       [-X_j*Y_j, rho**2 - Y_j**2, -Y_j*Z_j]])/rho**3
-    # d h_j / d p_I_j
-    dh_dpI = dh_dpC @ params.C_CB @ C_BI
-
-    # H_j = dh_dpC * C_CB * C_BI * dpI_dxi
-    H_j = np.zeros((2, STATE_DIM))
-    H_j[:, IX_ALPHA_X:IX_ALPHA_Y+1] = params.L_m*(dh_dpI @ dq_I_dalpha(alpha_x, alpha_y))
-    H_j[:, IX_PSI_P] = -o_j*(dh_dpI @ dm_I_dpsi_p(psi_p))
-
-    return h_j, H_j, p_C_j
+    return h, H
 
 
 def ekf_predict(xi, P, f_I, dt, params):
@@ -230,92 +244,83 @@ def ekf_predict(xi, P, f_I, dt, params):
     return xi_pred, P_pred
 
 
-def ekf_update(xi, P, measurements, phi, theta, psi, params):
+def ekf_update(xi, P, p_C_payload, phi, theta, psi, params, C_CM=None):
     """
-    Fold in every marker detected in one camera frame
+    Fold in one camera frame.
 
-    measurements: list of (marker_id, b_x, b_y, b_z), unit line of sight in
-    the camera frame
+    p_C_payload: payload board center in the camera frame [m], from PnP
+    C_CM: marker -> camera rotation from PnP. Omit it and the yaw row is
+          dropped, leaving psi_p to coast on the process model
     """
     xi = np.asarray(xi, dtype=float).copy()
     P = np.asarray(P, dtype=float).copy()
-    info = {"n_markers": 0, "innovation": None, "nis": None}
+    info = {"innovation": None, "nis": None}
 
-    meas = [m for m in (measurements or []) if not np.isnan(m[1:4]).any()]
-    if not meas:
+    if p_C_payload is None or np.isnan(p_C_payload).any():
         return xi, P, info
 
-    ids = [int(m[0]) for m in meas]
-    b = np.array([m[1:4] for m in meas], dtype=float)
-    b = b/np.linalg.norm(b, axis=1, keepdims=True)
+    C_IB = C_IB_enu(phi, theta, psi)
+    C_BI = C_IB.T
 
-    C_BI = C_IB_enu(phi, theta, psi).T
+    b = bearing_from_p_C(p_C_payload, params)
+    h, H = measurement_prediction(xi, C_BI, params)
 
-    z_rows, h_rows, H_rows = [], [], []
-    for marker_id, b_j in zip(ids, b):
-        o_j = payload.MARKER_OFFSET[marker_id]
-        h_j, H_j, _ = marker_prediction(xi, o_j, C_BI, params)
-        if h_j is None:
-            continue
-        z_rows.append(b_j[0:2])
-        h_rows.append(h_j)
-        H_rows.append(H_j)
+    z = np.array([b[0], b[1], 0.0])
+    R = np.diag([params.bearing_variance(),
+                 params.bearing_variance(),
+                 params.yaw_variance()])
+    rows = 2
 
-    if not z_rows:
-        return xi, P, info
+    if C_CM is not None:
+        z[IX_PSI_MEAS] = yaw_from_C_CM(C_CM, C_IB, params)
+        rows = MEAS_DIM
 
-    z = np.concatenate(z_rows)
-    h = np.concatenate(h_rows)
-    H = np.vstack(H_rows)
-    R = params.bearing_variance() * np.eye(z.size)
+    z, h, H, R = z[:rows], h[:rows], H[:rows], R[:rows, :rows]
 
     y = z - h
+    if rows == MEAS_DIM:
+        y[IX_PSI_MEAS] = wrap_pi(y[IX_PSI_MEAS])
+
     S = H @ P @ H.T + R
     K = P @ H.T @ np.linalg.inv(S)
 
     xi = xi + K @ y
-    xi[IX_PSI_P] = math.atan2(math.sin(xi[IX_PSI_P]), math.cos(xi[IX_PSI_P]))
+    xi[IX_PSI_P] = wrap_pi(xi[IX_PSI_P])
 
     P = (np.eye(STATE_DIM) - K @ H) @ P
     P = 0.5*(P + P.T)
 
-    info["n_markers"] = len(z_rows)
     info["innovation"] = y
     info["nis"] = float(y @ np.linalg.solve(S, y))
 
     return xi, P, info
 
 
-def ekf(xi, P, f_I, dt, params, measurements=None, phi=0, theta=0, psi=0):
+def ekf(xi, P, f_I, dt, params, p_C_payload=None, phi=0, theta=0, psi=0, C_CM=None):
     """
     One full filter tick: predict, then update if a camera frame arrived
 
     f_I: 3X1 drone specific force, INERTIAL frame. Hover = [0, 0, +g0]
     """
     xi, P = ekf_predict(xi, P, f_I, dt, params)
-    if measurements:
-        xi, P, info = ekf_update(xi, P, measurements, phi, theta, psi, params)
+    if p_C_payload is not None:
+        xi, P, info = ekf_update(xi, P, p_C_payload, phi, theta, psi, params, C_CM)
     else:
-        info = {"n_markers": 0, "innovation": None, "nis": None}
+        info = {"innovation": None, "nis": None}
 
     return xi, P, info
 
 
-def initial_state(p_C_payload, phi, theta, psi, C_CM=None, sigma_alpha=0.02):
+def initial_state(p_C_payload, phi, theta, psi, params, C_CM=None, sigma_alpha=0.02):
     """
-    Seed the filter from one frame's PnP output.
-
-    p_C_payload: payload board center in the camera frame
-    C_CM: marker -> camera rotation from PnP, first column is mI in camera frame
+    Seed the filter from one frame's PnP output
     """
     C_IB = C_IB_enu(phi, theta, psi)
-    p_B = config.CAM_R @ np.asarray(p_C_payload, float)
-    p_I = C_IB @ p_B
-    alpha_x, alpha_y = alpha_from_q_I(p_I)
+    b_C = bearing_from_p_C(p_C_payload, params)
+    alpha_x, alpha_y = alpha_from_q_I(C_IB @ (params.C_BC @ b_C))
 
     if C_CM is not None:
-        m = C_IB @ (config.CAM_R @ np.asarray(C_CM, float)[:, 0])
-        psi_p = math.atan2(m[1], m[0])
+        psi_p = yaw_from_C_CM(C_CM, C_IB, params)
         sigma_psi_p = math.radians(15)
     else:
         psi_p = 0

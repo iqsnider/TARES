@@ -2,9 +2,10 @@
 Run the payload EKF on a recorded flight and produce:
   1. a static 3D ENU plot of drone / measured payload / EKF-estimated payload
   2. a time-series comparison of the EKF against the per-frame camera
-     measurement, with occlusion shading and the 2-sigma band
+     measurement -- swing angles and payload yaw -- with occlusion shading
+     and the 2-sigma band
   3. an animation of the camera-frame line of sight showing the measured
-     marker bearings against the EKF's predicted ones, with a 1-sigma
+     payload-center bearing against the EKF's predicted one, with a 1-sigma
      uncertainty ellipse
 
 The pose CSV has no wall clock, so the offset between the two logs is
@@ -19,7 +20,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import cv2
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
@@ -29,7 +29,7 @@ import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 from sim.plotting import TimeSlider, configure_plot_style
 import catalog
-from run_on_log import build_inputs, group_frames, make_params
+from run_on_log import build_inputs, dof, group_frames, make_params
 
 configure_plot_style()   # shared serif / Computer Modern theme
 
@@ -66,7 +66,7 @@ def run_full(frames, inp, params, offset):
     xi = P = None
     t_prev = None
     out = []
-    for t_cam, meas, det, g in frames:
+    for t_cam, p_C, C_CM, det in frames:
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
@@ -76,39 +76,31 @@ def run_full(frames, inp, params, offset):
         f_I = np.array([np.interp(t, t_fl, inp["f_I"][:, k]) for k in range(3)])
 
         if xi is None:
-            if not meas:
+            if p_C is None:
                 continue
-            p_C_payload = payload.get_payload_center_in_camera_frame(g)
-            C_CM, _ = cv2.Rodrigues(det[["rx", "ry", "rz"]].iloc[0].to_numpy())
-            xi, P = ekfm.initial_state(p_C_payload, phi, theta, psi, C_CM=C_CM)
+            xi, P = ekfm.initial_state(p_C, phi, theta, psi, params, C_CM=C_CM)
             t_prev = t_cam
             continue
 
         dt = min(max(t_cam - t_prev, 1e-3), 0.5)
         t_prev = t_cam
-        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, measurements=meas,
-                               phi=phi, theta=theta, psi=psi)
+        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, p_C_payload=p_C,
+                               phi=phi, theta=theta, psi=psi, C_CM=C_CM)
 
         C_BI = ekfm.C_IB_enu(phi, theta, psi).T
-        pred = {}
-        for mid in IDS:
-            h_j, H_j, p_C_j = ekfm.marker_prediction(
-                xi, payload.MARKER_OFFSET[mid], C_BI, params)
-            # a marker behind the camera still has a bearing, a mirrored one
-            pred[mid] = h_j if p_C_j[2] > 0 else None
-        h_c, H_c, p_C_c = ekfm.marker_prediction(xi, 0.0, C_BI, params)
-        S_c = H_c @ P @ H_c.T if p_C_c[2] > 0 else None
-        if p_C_c[2] <= 0:
-            h_c = None
+        h, H = ekfm.measurement_prediction(xi, C_BI, params)
+        pred_c = h[:2]
+        S_c = H[:2] @ P @ H[:2].T
 
-        # what the filter was handed, as unit vectors
-        b_meas = {}
-        for mid, bx, by, bz in meas:
-            b = np.array([bx, by, bz], float)
-            b_meas[int(mid)] = b/np.linalg.norm(b)
+        # the one bearing the filter is fed, and the individual markers behind
+        # it, all from the pivot so they share the prediction's origin
+        b_meas = None if p_C is None else ekfm.bearing_from_p_C(p_C, params)
+        b_markers = {int(m.marker_id):
+                     ekfm.bearing_from_p_C([m.x, m.y, m.z], params)
+                     for m in det.itertuples()}
 
-        out.append(dict(t_cam=t_cam, t_flight=t, n=info["n_markers"],
-                        nis=info["nis"],
+        out.append(dict(t_cam=t_cam, t_flight=t, n=len(det),
+                        dof=dof(C_CM), nis=info["nis"],
                         alpha_x=xi[ekfm.IX_ALPHA_X],
                         alpha_y=xi[ekfm.IX_ALPHA_Y],
                         alpha_dot_x=xi[ekfm.IX_ALPHA_DOT_X],
@@ -118,38 +110,40 @@ def run_full(frames, inp, params, offset):
                                                  ekfm.IX_ALPHA_X]),
                         sigma_alpha_y=math.sqrt(P[ekfm.IX_ALPHA_Y,
                                                  ekfm.IX_ALPHA_Y]),
+                        sigma_psi_p=math.sqrt(P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]),
                         q_I=ekfm.q_I(xi[ekfm.IX_ALPHA_X], xi[ekfm.IX_ALPHA_Y]),
-                        pred=pred, pred_c=h_c, S_c=S_c, meas=b_meas))
+                        pred_c=pred_c, S_c=S_c, b_meas=b_meas,
+                        meas=b_markers))
     return out
 
 
-def direct_measurement(frames, inp, offset):
+def direct_measurement(frames, inp, params, offset):
     """
     Per-frame swing angles straight from the PnP chain, no filtering.
     This is the orange scatter the EKF gets compared against. It is not
     truth -- it carries the same attitude error plus PnP depth noise.
+
+    Same chain the filter is initialised from, so the two are comparable.
     """
     t_fl = inp["t"]
-    t_BC_B = np.array([config.CAM_OFFSET_X, config.CAM_OFFSET_Y,
-                       config.CAM_OFFSET_Z])
     rows = []
-    for t_cam, meas, det, g in frames:
-        if len(det) == 0:
+    for t_cam, p_C, C_CM, det in frames:
+        if p_C is None:
             continue
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
-        p_C_payload = payload.get_payload_center_in_camera_frame(g)
-        if p_C_payload is None:
-            continue
-        p_B = config.CAM_R @ p_C_payload + t_BC_B
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
+        b_C = ekfm.bearing_from_p_C(p_C, params)
         alpha_x, alpha_y = ekfm.alpha_from_q_I(
-            ekfm.C_IB_enu(phi, theta, psi) @ p_B)
-        rows.append((t_cam, alpha_x, alpha_y, len(det)))
-    return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y", "n"])
+            ekfm.C_IB_enu(phi, theta, psi) @ (params.C_BC @ b_C))
+        psi_p = np.nan if C_CM is None else ekfm.yaw_from_C_CM(
+            C_CM, ekfm.C_IB_enu(phi, theta, psi), params)
+        rows.append((t_cam, alpha_x, alpha_y, psi_p, len(det)))
+    return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y",
+                                       "psi_p", "n"])
 
 
 def estimated_payload_enu(records, fl, L_m):
@@ -177,12 +171,12 @@ def analyse(session, verbose=True):
         raise SystemExit(f"session {session.id} has no camera data")
 
     offset = session.pose_offset
-    params = make_params(session.L_dyn, L_m=session.L_marker)
+    params = make_params(session.L_dyn)
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
     records = run_full(frames, inp, params, offset)
-    meas_df = direct_measurement(frames, inp, offset)
+    meas_df = direct_measurement(frames, inp, params, offset)
     if verbose:
         print(f"{len(records)} filter steps, "
               f"{sum(r['n'] > 0 for r in records)} with a measurement")
@@ -198,8 +192,10 @@ def analyse(session, verbose=True):
 def summarise(records, meas_df):
     """Print the numbers worth checking after every run."""
     R = pd.DataFrame([{k: v for k, v in r.items()
-                       if k in ("t_cam", "n", "nis", "alpha_x", "alpha_y",
-                                "sigma_alpha_x", "sigma_alpha_y")}
+                       if k in ("t_cam", "n", "dof", "nis",
+                                "alpha_x", "alpha_y", "psi_p",
+                                "sigma_alpha_x", "sigma_alpha_y",
+                                "sigma_psi_p")}
                       for r in records])
     sel = R.n > 0
     mi = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_x)
@@ -211,7 +207,7 @@ def summarise(records, meas_df):
     print(f"  alpha_y RMS vs direct measurement : "
           f"{np.rad2deg(np.sqrt(np.mean((R.alpha_y[sel]-mj[sel])**2))):.3f} deg")
     print(f"  mean normalised NIS               : "
-          f"{np.mean(warm.nis/(2*warm.n)):.3f}  (target 1.0)")
+          f"{np.mean(warm.nis/warm.dof):.3f}  (target 1.0)")
     print(f"  mean 1-sigma alpha                : "
           f"{np.rad2deg(R.sigma_alpha_x[sel].mean()):.3f}, "
           f"{np.rad2deg(R.sigma_alpha_y[sel].mean()):.3f} deg")
@@ -305,34 +301,44 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
     return fig
 
 
+def _break_wraps(deg, jump=180.0):
+    """NaN the sample after a +-180 wrap, so the line does not draw a vertical
+    stripe across the panel. Only psi_p wraps."""
+    deg = np.asarray(deg, float).copy()
+    deg[np.r_[False, np.abs(np.diff(deg)) > jump]] = np.nan
+    return deg
+
+
 def plot_timeseries(R, meas_df, offset, save=None):
     """EKF vs per-frame measurement, with occlusion shading and 2-sigma band."""
-    fig, axs = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+    fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+    # psi_p is a measured state now, so it gets a panel like the swing angles
     for k, (nm, lbl, sg) in enumerate(
             [("alpha_x", r"$\alpha_x$", "sigma_alpha_x"),
-             ("alpha_y", r"$\alpha_y$", "sigma_alpha_y")]):
+             ("alpha_y", r"$\alpha_y$", "sigma_alpha_y"),
+             ("psi_p", r"$\psi_P$", "sigma_psi_p")]):
         a = axs[k]
         gaps = R.t_cam[R.n == 0].to_numpy()
         for t0 in gaps:
             a.axvspan(t0 - 0.015, t0 + 0.015, color="0.88", lw=0)
+        y = _break_wraps(np.rad2deg(R[nm]))
+        sig = np.rad2deg(R[sg])
         a.plot(meas_df.t_cam, np.rad2deg(meas_df[nm]), ".", ms=4,
                color="tab:orange", label="per-frame camera measurement")
-        a.plot(R.t_cam, np.rad2deg(R[nm]), "-", lw=1.6, color="tab:red",
+        a.plot(R.t_cam, y, "-", lw=1.6, color="tab:red",
                label="EKF estimate")
-        a.fill_between(R.t_cam,
-                       np.rad2deg(R[nm] - 2*R[sg]),
-                       np.rad2deg(R[nm] + 2*R[sg]),
+        a.fill_between(R.t_cam, y - 2*sig, y + 2*sig,
                        color="tab:red", alpha=0.2,
                        label=r"EKF $2\sigma$")
         a.set_ylabel(f"{lbl} [deg]")
         a.grid(alpha=0.3)
         a.legend(fontsize=8, loc="upper right")
 
-    axs[2].plot(R.t_cam, R.n, "k.", ms=3)
-    axs[2].set_ylabel("markers seen")
-    axs[2].set_yticks([0, 1, 2, 3])
-    axs[2].set_xlabel("camera time [s]")
-    axs[2].grid(alpha=0.3)
+    axs[3].plot(R.t_cam, R.n, "k.", ms=3)
+    axs[3].set_ylabel("markers seen")
+    axs[3].set_yticks([0, 1, 2, 3])
+    axs[3].set_xlabel("camera time [s]")
+    axs[3].grid(alpha=0.3)
     axs[0].set_title("Payload swing: EKF vs direct measurement "
                      f"(grey = no marker detected, offset {offset:+.2f} s)")
     fig.tight_layout()
@@ -343,8 +349,12 @@ def plot_timeseries(R, meas_df, offset, save=None):
 
 
 def animate_camera(records, save, fps=25, trail=40):
-    """Line of sight in the camera frame: the (b_x, b_y) components of the unit
-    bearings the filter is fed, against the ones it predicts.
+    """Line of sight in the camera frame: the (b_x, b_y) the filter is fed
+    against the one it predicts.
+
+    The filter now sees a single bearing, to the payload board center. The
+    individual markers are drawn behind it for context -- which ones PnP had
+    to work with -- shifted to the same pivot origin as the prediction.
 
     No intrinsics are involved, so this is not the image plane; it is the same
     view undistorted and scaled by the focal length, with the optical axis at
@@ -360,22 +370,21 @@ def animate_camera(records, save, fps=25, trail=40):
 
     # one set of limits for the whole run, so nothing jumps between frames
     pts = [b for r in records for b in r["meas"].values()]
-    pts += [r["pred_c"] for r in records if r["pred_c"] is not None]
+    pts += [r["pred_c"] for r in records]
     pts = np.array([p[:2] for p in pts])
     pad = 0.05*max(np.ptp(pts, axis=0).max(), 1e-3)
     ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
     ax.set_ylim(pts[:, 1].max() + pad, pts[:, 1].min() - pad)   # +y downward
 
-    meas_pts = {mid: ax.plot([], [], "o", ms=9, color=ID_COLOR[mid],
-                             label=f"measured {ID_NAME[mid]}")[0] for mid in IDS}
-    pred_pts = {mid: ax.plot([], [], "x", ms=10, mew=2.0,
-                             color=ID_COLOR[mid], alpha=0.9)[0] for mid in IDS}
+    meas_pts = {mid: ax.plot([], [], "o", ms=8, color=ID_COLOR[mid], alpha=0.55,
+                             label=f"detected {ID_NAME[mid]}")[0] for mid in IDS}
+    board_pt, = ax.plot([], [], "+", ms=14, mew=2.2, color="k",
+                        label="measured payload center")
     center_pt, = ax.plot([], [], "*", ms=16, color="tab:red",
-                         label="EKF payload center")
+                         label="EKF predicted center")
     trail_ln, = ax.plot([], [], "-", lw=1.0, color="tab:red", alpha=0.5)
     ell = Ellipse((0, 0), 1, 1, fc="tab:red", alpha=0.18, ec="tab:red", lw=1.0)
     ax.add_patch(ell)
-    ax.plot([], [], "kx", ms=8, mew=2, label="EKF predicted marker")
     ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
     txt = ax.text(0.02, 0.02, "", transform=ax.transAxes, fontsize=9,
                   va="bottom", family="monospace",
@@ -391,44 +400,40 @@ def animate_camera(records, save, fps=25, trail=40):
 
     def update(i):
         r = records[i]
+        # the dots come and go with the detections; the prediction is always
+        # drawn, so the coasting through an occlusion is visible
         for mid in IDS:
-            # measured dots follow the detections; the predicted x always shows
-            # where the filter thinks each marker is, detected or not
             _at(meas_pts[mid], r["meas"].get(mid))
-            _at(pred_pts[mid], r["pred"][mid])
+        _at(board_pt, r["b_meas"])
 
         c = r["pred_c"]
         _at(center_pt, c)
-        ell.set_visible(c is not None)
-        if c is not None:
-            hist.append(c)
-            del hist[:-trail]
-            hh = np.array(hist)
-            trail_ln.set_data(hh[:, 0], hh[:, 1])
-            S = r["S_c"]
-            if S is not None:
-                w, V = np.linalg.eigh(S)
-                w = np.maximum(w, 1e-12)
-                ell.set_center((c[0], c[1]))
-                ell.width, ell.height = 2*np.sqrt(w[1]), 2*np.sqrt(w[0])
-                ell.angle = math.degrees(math.atan2(V[1, 1], V[0, 1]))
+        hist.append(c)
+        del hist[:-trail]
+        hh = np.array(hist)
+        trail_ln.set_data(hh[:, 0], hh[:, 1])
+
+        w, V = np.linalg.eigh(r["S_c"])
+        w = np.maximum(w, 1e-12)
+        ell.set_center((c[0], c[1]))
+        ell.width, ell.height = 2*np.sqrt(w[1]), 2*np.sqrt(w[0])
+        ell.angle = math.degrees(math.atan2(V[1, 1], V[0, 1]))
 
         resid = ""
-        if r["meas"]:
+        if r["b_meas"] is not None:
             # angle between two unit vectors, small enough that the norm will do
-            e = [np.linalg.norm(r["meas"][m][:2] - r["pred"][m])
-                 for m in r["meas"] if r["pred"][m] is not None]
-            if e:
-                resid = f"  resid {math.degrees(np.mean(e)):5.2f} deg"
+            e = np.linalg.norm(r["b_meas"][:2] - c)
+            resid = f"  resid {math.degrees(e):5.2f} deg"
         txt.set_text(f"t = {r['t_cam']:6.2f} s   markers {r['n']}{resid}\n"
                      f"alpha = ({math.degrees(r['alpha_x']):+6.2f}, "
                      f"{math.degrees(r['alpha_y']):+6.2f}) deg   "
-                     f"1sig {math.degrees(r['sigma_alpha_x']):.2f} deg")
-        return list(meas_pts.values()) + list(pred_pts.values()) + \
-            [center_pt, trail_ln, ell, txt]
+                     f"1sig {math.degrees(r['sigma_alpha_x']):.2f} deg   "
+                     f"psi_P {math.degrees(r['psi_p']):+7.2f} deg")
+        return list(meas_pts.values()) + [board_pt, center_pt, trail_ln,
+                                          ell, txt]
 
     ax.set_title(
-        "Camera-frame bearings — measured markers vs EKF prediction")
+        "Camera-frame bearing — measured payload center vs EKF prediction")
     anim = animation.FuncAnimation(fig, update, frames=len(records),
                                    interval=1000/fps, blit=False)
     anim.save(str(save), writer=animation.FFMpegWriter(fps=fps, bitrate=2400))

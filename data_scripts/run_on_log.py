@@ -25,18 +25,28 @@ def build_inputs(fl):
 
 
 def group_frames(pose):
-    """[(t_cam, [(id,bx,by,bz),...], first_det_row_or_None, frame_df), ...] sorted by time.
+    """[(t_cam, p_C_payload, C_CM, det), ...] sorted by time.
 
-    The bearing is the PnP translation to that marker, camera frame; the filter
-    normalises it and only uses the direction.
+    This is the pre-processing the filter no longer does: the payload board
+    center in the camera frame and the marker rotation, both out of PnP.
+    p_C_payload and C_CM are None for a frame with no detection; `det` is the
+    frame's detected rows, kept for the marker count and for plotting.
     """
     out = []
     for _, g in pose.groupby('frame'):
         det = g.dropna(subset=['marker_id'])
-        meas = [(int(m.marker_id), m.x, m.y, m.z) for m in det.itertuples()]
-        out.append((float(g.time_s.iloc[0]), meas, det, g))
+        p_C = payload.get_payload_center_in_camera_frame(g)
+        C_CM = None
+        if len(det):
+            C_CM, _ = cv2.Rodrigues(det[['rx', 'ry', 'rz']].iloc[0].to_numpy())
+        out.append((float(g.time_s.iloc[0]), p_C, C_CM, det))
     out.sort(key=lambda kv: kv[0])
     return out
+
+
+def dof(C_CM):
+    """Measurement rows folded in: 2 bearing, plus the yaw row when PnP gave one."""
+    return ekfm.MEAS_DIM if C_CM is not None else 2
 
 
 def run(frames, inp, params, offset):
@@ -44,7 +54,7 @@ def run(frames, inp, params, offset):
     xi = P = None
     t_prev = None
     rows = []
-    for t_cam, meas, det, g in frames:
+    for t_cam, p_C, C_CM, det in frames:
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
@@ -55,21 +65,19 @@ def run(frames, inp, params, offset):
                         np.interp(t, t_fl, f_fl[:, 1]),
                         np.interp(t, t_fl, f_fl[:, 2])])
         if xi is None:
-            if not meas:
+            if p_C is None:
                 continue
-            p_C_payload = payload.get_payload_center_in_camera_frame(g)
-            C_CM, _ = cv2.Rodrigues(det[['rx', 'ry', 'rz']].iloc[0].to_numpy())
-            xi, P = ekfm.initial_state(p_C_payload, phi, theta, psi, C_CM=C_CM)
+            xi, P = ekfm.initial_state(p_C, phi, theta, psi, params, C_CM=C_CM)
             t_prev = t_cam
             continue
         dt = min(max(t_cam - t_prev, 1e-3), 0.5)
         t_prev = t_cam
-        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, measurements=meas,
-                               phi=phi, theta=theta, psi=psi)
-        rows.append((t_cam, t, info['n_markers'], info['nis'],
+        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, p_C_payload=p_C,
+                               phi=phi, theta=theta, psi=psi, C_CM=C_CM)
+        rows.append((t_cam, t, len(det), dof(C_CM), info['nis'],
                      xi[0], xi[1], xi[2], xi[3], xi[4],
                      math.sqrt(P[0, 0]), math.sqrt(P[1, 1]), phi, theta, psi))
-    return pd.DataFrame(rows, columns=['t_cam', 't_flight', 'n', 'nis',
+    return pd.DataFrame(rows, columns=['t_cam', 't_flight', 'n', 'dof', 'nis',
                                        'alpha_x', 'alpha_y',
                                        'alpha_dot_x', 'alpha_dot_y', 'psi_p',
                                        'sigma_alpha_x', 'sigma_alpha_y',
@@ -82,15 +90,16 @@ def mean_nnis(df, warmup=3.0):
     m = df[(df.n > 0) & (df.t_cam > df.t_cam.min() + warmup)]
     if len(m) < 20:
         return np.inf
-    return float(np.mean(m.nis.to_numpy()/(2*m.n.to_numpy())))
+    return float(np.mean(m.nis.to_numpy()/m.dof.to_numpy()))
 
 
-def make_params(L, L_m=8.31, **kw):
+def make_params(L, **kw):
     kw.setdefault("q_alpha", 0.02**2)
     kw.setdefault("q_psi_p", 0.3**2)
-    kw.setdefault("sigma_bearing", math.radians(0.04))
+    kw.setdefault("sigma_bearing", math.radians(0.05))
+    kw.setdefault("sigma_yaw", math.radians(3.0))
     kw.setdefault("sigma_att", math.radians(0.5))
-    return ekfm.EKFParams(L=L, L_m=L_m, **kw)
+    return ekfm.EKFParams(L=L, **kw)
 
 
 if __name__ == "__main__":
