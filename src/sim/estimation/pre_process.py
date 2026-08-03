@@ -1,25 +1,3 @@
-"""
-Camera pre-processing for the payload EKF.
-
-Everything between the ArUco pose data and the numbers the filter and the
-plots consume lives here: PnP marker poses -> payload board center and marker
-row direction in the camera frame -> line of sight from the tether pivot ->
-either the measurement vector the filter folds in, or the same frame written
-as swing angles for a plot.
-
-    z = [b_x, b_y, psi_P]
-
-    b       unit line of sight from the tether pivot to the payload board
-            center, camera frame. Only the first two components are carried,
-            the third is redundant since ||b|| = 1
-    psi_P   payload yaw, inertial frame, from the marker row direction
-
-Rotation only: normalising the line of sight drops the tether length, so
-nothing here needs to know how long the tether is.
-
-Camera frame is the OpenCV convention config.CAM_R assumes:
-+x right, +y DOWN, +z along the optical axis.
-"""
 import math
 import numpy as np
 import cv2
@@ -27,31 +5,24 @@ import cv2
 import Prm.config as config
 
 
-# z = [b_x, b_y, psi_p]
 MEAS_DIM = 3
 IX_B_X, IX_B_Y, IX_PSI_MEAS = range(MEAS_DIM)
 
-# signed distance from the board center along the marker row, +left [m]
 MARKER_OFFSET = {config.LEFT_MARKER_ID: config.MARKER_CENTER_TO_CENTER_DIST,
                  config.CENTER_MARKER_ID: 0,
                  config.RIGHT_MARKER_ID: -config.MARKER_CENTER_TO_CENTER_DIST}
 
-# camera <-> body, and the two body points the line of sight runs between
 T_BC = config.CAM_R
 T_CB = T_BC.T
 t_BC_B = np.array([config.CAM_OFFSET_X,
                    config.CAM_OFFSET_Y,
                    config.CAM_OFFSET_Z])
-l_B = np.array([0.0, 0.0, config.TETHER_PIVOT_OFFSET])
+l_B = config.TETHER_PIVOT_OFFSET
 
 
 def get_payload_center_in_camera_frame(frame):
     """
-    (payload board center, marker row direction) in the camera frame.
-
-    Every detected marker gives its own estimate of both, from its PnP pose
-    and its known offset along the row, and the estimates are averaged.
-    Returns None when the frame holds no detection
+    Finds the payload center in the camera frame
     """
     center_estimates = []
     mC_estimates = []
@@ -83,33 +54,31 @@ def get_payload_center_in_camera_frame(frame):
     return approx_center, approx_mC
 
 
-def pivot_bearing(p_C):
+def shift_origin(pC_ctr):
     """
-    Camera frame point -> UNIT line of sight to it FROM THE TETHER PIVOT,
-    still in the camera frame.
-
-    Shifts the origin camera -> body -> pivot, then normalises
+    Shift the origin from the camera optical center to the tether pivot point
     """
-    p = np.asarray(p_C, float) + T_CB @ (t_BC_B - l_B)
+    pC = np.asarray(pC_ctr, float) + T_CB @ (t_BC_B - l_B)
 
-    return p/np.linalg.norm(p)
+    normalized_pC = pC/np.linalg.norm(pC)
+
+    return normalized_pC
 
 
 def payload_yaw(mC, T_IB):
     """
-    Payload yaw in the inertial frame from the marker row direction.
-
-    atan2 already lands in (-pi, pi], so no wrapping is needed
+    Returns the payload yaw in the inertial frame from the averaged payload center mC in the camera frame
     """
     mI = T_IB @ (T_BC @ np.asarray(mC, float))
 
-    return math.atan2(mI[1], mI[0])
+    z_psi_p = math.atan2(mI[1],mI[0])
+
+    return z_psi_p
 
 
 def alpha_from_q_I(q):
     """
-    Returns (alpha_x, alpha_y) from any pivot->payload vector expressed in
-    the inertial frame
+    returns alpha_x and alpha_y in the inertial frame
     """
     q = np.asarray(q, dtype=float)
     q = q/np.linalg.norm(q)
@@ -121,17 +90,14 @@ def alpha_from_q_I(q):
 
 def measurement(frame, T_IB):
     """
-    One camera frame -> z, the vector the filter folds in.
-
-    Returns None when the frame holds no detection, which is the filter's cue
-    to coast on the process model
+    Returns the measurement needed for the EKF from a given frame and drone attitude
     """
     detection = get_payload_center_in_camera_frame(frame)
     if detection is None:
         return None
     p_ctr_C, mC = detection
 
-    b = pivot_bearing(p_ctr_C)
+    b = shift_origin(p_ctr_C)
 
     z = np.zeros(MEAS_DIM)
     z[IX_B_X] = b[0]
@@ -154,7 +120,7 @@ def swing_angles(frame, T_IB):
         return None
     p_ctr_C, mC = detection
 
-    b = pivot_bearing(p_ctr_C)
+    b = shift_origin(p_ctr_C)
     alpha_x, alpha_y = alpha_from_q_I(T_IB @ (T_BC @ b))
 
     return alpha_x, alpha_y, payload_yaw(mC, T_IB)
@@ -162,14 +128,12 @@ def swing_angles(frame, T_IB):
 
 def marker_bearings(frame):
     """
-    {marker_id: unit line of sight from the pivot}, one per detected marker.
-
     The individual markers behind the board center, for plots that show which
     ones PnP had to work with
     """
     out = {}
     for marker in frame.dropna(subset=["marker_id"]).itertuples():
-        out[int(marker.marker_id)] = pivot_bearing([marker.x,
+        out[int(marker.marker_id)] = shift_origin([marker.x,
                                                     marker.y,
                                                     marker.z])
 

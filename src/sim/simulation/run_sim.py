@@ -1,29 +1,31 @@
 """
 uv run run_sim.py
-uv run run_sim.py --arch drone_pd --ref-for drone
-
-plotting
-uv run plotting.py out/sim_results.npz
+uv run run_sim.py --arch drone_lqr --ref-for drone
+uv run run_sim.py --arch payload_lqr --ref-for payload
 """
 
 import argparse
 import math
 
 import numpy as np
-from scipy.integrate import solve_ivp
 
-from model import nonlinear_ode, payload_state
 import Prm.config as config
 import sim.drone_test_only_mission_manager as mission
+from sim import plotting
 from sim.simulation import control_law
-from sim.simulation.sim_io import DEFAULT_RESULTS, save_results
+from sim.simulation.model import nonlinear_ode, payload_state
+
+import sim.estimation.pre_process as pp
+from sim.estimation.ekf import EKF, T_IB_fn
 
 
 REF_TARGETS = ('payload', 'drone')
 
 
 class _OffsetReference:
-    """A reference shifted by a constant position offset."""
+    """
+    A reference shifted by a constant position offset
+    """
 
     def __init__(self, ref, offset):
         self._ref = ref
@@ -36,62 +38,96 @@ class _OffsetReference:
 
 
 def as_payload_reference(ref, ref_target):
-    """The payload reference the control stack tracks.
-
-    Every architecture in control_law.py consumes a payload reference, so a
-    trajectory drawn for the drone is dropped one tether length to give the
-    payload curve that hangs the drone on the caller's original path.
+    """
+    The payload reference the the controller
     """
     if ref_target == 'drone':
-        return _OffsetReference(ref, [0.0, 0.0, -config.TETHER_LEN])
+        return _OffsetReference(ref, [0, 0, -config.TETHER_LEN])
     return ref
 
 
 def initial_state(pl_ref):
-    """Drone hovering at rest with the payload hanging on the t=0 reference."""
+    """
+    Drone hovering at rest with the payload hanging on the t=0 reference
+    """
     x0 = np.zeros(16)
-    p_pl0, _ = pl_ref(0.0)
-    x0[0:3] = p_pl0 + np.array([0.0, 0.0, config.TETHER_LEN])
+    p_pl0, _ = pl_ref(0)
+    x0[0:3] = p_pl0 + np.array([0, 0, config.TETHER_LEN])
     return x0
 
-
-def simulate(architecture, ref, dt=0.02, ref_target='payload'):
-    """Integrate the closed loop while tracking `ref`.
-
-    `ref_target` names the body `ref` was drawn for ('payload' or 'drone');
-    the returned P_ref and error rows 0:6 are reported against that body.
-
-    Returns ts, X, P_ref, err_log (16 x N), u_log (4 x N).
+def synthetic_measurement(x, T_IB, sigma_xy, sigma_yaw, rng, psi_p=0):
     """
+    The bearing a camera would see, from truth, plus noise
+    """
+    alx, aly = x[12], x[13]
+    q_I = np.array([math.sin(alx)*math.cos(aly),
+                    math.sin(aly),
+                    -math.cos(alx)*math.cos(aly)])
+
+    b = config.CAM_R.T @ T_IB.T @ q_I
+
+    z = np.array([b[0], b[1], psi_p]) + np.array([rng.normal(0, sigma_xy),
+                                                rng.normal(0, sigma_xy),
+                                                 rng.normal(0, sigma_yaw)])
+
+    return z
+
+
+def simulate(architecture, ref, dt=0.02, ekf=False, ref_target='payload',
+             cam_every=5):
     if ref_target not in REF_TARGETS:
         raise ValueError(f'ref_target must be one of {REF_TARGETS}')
 
     pl_ref = as_payload_reference(ref, ref_target)
-    t_end = ref.duration
-    t_eval = np.arange(0, t_end, dt)
+    ts = np.arange(0, ref.duration, dt)
 
-    def ode(t, x):
-        return nonlinear_ode(x, architecture(x, t, pl_ref)[0])
+    X = np.zeros((len(ts), 16))
+    err_log = np.zeros((16, len(ts)))
+    u_log = np.zeros((4, len(ts)))
+    xi_log = np.zeros((5, len(ts)))
+    X[0] = initial_state(pl_ref)
 
-    sol = solve_ivp(ode, [0.0, t_end], initial_state(pl_ref),
-                    t_eval=t_eval, method='RK45')
+    filt = rng = None
+    a_prev = np.zeros(3)
+    if ekf:
+        filt = EKF(0, 0, 0, X[0, 12], X[0, 13], 0)
+        rng = np.random.default_rng(0)
 
-    X = sol.y.T
-    P_ref = np.array([ref(t)[0] for t in sol.t])
+    for i, t in enumerate(ts):
+        x = X[i]
+
+        if filt is not None:
+            T_IB = T_IB_fn(x[6], x[7], x[8])
+            filt.xi, filt.P = filt.ekf_predict(filt.xi, filt.P, a_prev, dt)
+            if i % cam_every == 0:
+                z = synthetic_measurement(x, T_IB, filt.sigma_xy,
+                                          filt.sigma_yaw, rng)
+                filt.xi, filt.P = filt.update_with_z(filt.xi, filt.P, z, T_IB)
+            xi_log[:, i] = filt.xi
+
+            x_hat = x.copy()
+            x_hat[12:16] = filt.xi[0:4]
+        else:
+            x_hat = x
+
+        u, e = architecture(x_hat, t, pl_ref)
+        xdot = nonlinear_ode(x, u)
+        a_prev = xdot[3:6]
+
+        u_log[:, i] = u
+        err_log[:, i] = e
+
+        if i + 1 < len(ts):
+            X[i + 1] = x + dt*xdot
+
+    P_ref = np.array([ref(t)[0] for t in ts])
     p_PL, v_PL = payload_state(X)
-    # the body the reference was drawn for is the one we score against
     p_tgt, v_tgt = ((X[:, 0:3], X[:, 3:6]) if ref_target == 'drone'
                     else (p_PL, v_PL))
+    err_log[0:3] = (p_tgt - P_ref).T
+    err_log[3:6] = (v_tgt - np.array([ref(t)[1] for t in ts])).T
 
-    err_log = np.zeros((16, len(sol.t)))
-    u_log = np.zeros((4, len(sol.t)))
-
-    for i, t in enumerate(sol.t):
-        u_log[:, i], err_log[:, i] = architecture(X[i], t, pl_ref)
-        err_log[0:3, i] = p_tgt[i] - P_ref[i]
-        err_log[3:6, i] = v_tgt[i] - ref(t)[1]
-
-    return sol.t, X, P_ref, err_log, u_log
+    return ts, X, P_ref, err_log, u_log, xi_log
 
 
 
@@ -106,8 +142,10 @@ def main():
                     dest='ref_target',
                     help='which body the reference trajectory is drawn for')
 
-    ap.add_argument('-o', '--out', default=DEFAULT_RESULTS,
-                    help='output .npz path')
+    ap.add_argument('--layout', default='panels',
+                    choices=('panels', 'grid', 'both'))
+
+    ap.add_argument('--ekf', action="store_true")
 
     args = ap.parse_args()
 
@@ -121,13 +159,15 @@ def main():
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)
 
-    ts, X, P_ref, err_log, u_log = simulate(architecture, ref,
-                                            ref_target=args.ref_target)
+    ts, X, P_ref, err_log, u_log, xi_log = simulate(architecture, ref,ekf=args.ekf, ref_target=args.ref_target)
 
-    path = save_results(args.out, ts, X, P_ref, err_log, u_log, arch=args.arch,
-                        ref_target=args.ref_target)
     print(f'{args.arch} ({args.ref_target} reference): {len(ts)} samples '
-          f'over {ts[-1]:.1f} s -> {path}')
+          f'over {ts[-1]:.1f} s')
+
+    plotting.plot_run(dict(ts=ts, X=X, P_ref=P_ref, err_log=err_log,
+                           u_log=u_log, arch=args.arch,
+                           ref_target=args.ref_target),
+                      layout=args.layout)
 
 
 if __name__ == '__main__':

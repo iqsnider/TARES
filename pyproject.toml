@@ -1,5 +1,5 @@
 [project]
-name = "tares-sitl"
+name = "TARES"
 version = "0.1.0"
 description = "Tethered Aerial Radiation Estimation System (TARES)"
 readme = "README.md"
@@ -25,7 +25,4 @@ build-backend = "hatchling.build"
 packages = ["src/sim",
     "src/comms",
     "src/logs",
-    "src/sim/estimation",
-    "src/sim/simulation",
-    "src/sim/simulation/model",
     "Prm"]

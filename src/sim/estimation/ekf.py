@@ -167,17 +167,24 @@ class EKF:
         """
         return np.array([alpha_x, alpha_y, -1])
 
+
     def ekf_update(self, xi, P, frame, T_IB):
         """
         Fold in one camera frame
         """
-        xi = np.asarray(xi, dtype=float).copy()
-        P = np.asarray(P, dtype=float).copy()
-
-        # all the camera work: PnP -> board center -> line of sight and yaw
         z = pp.measurement(frame, T_IB)
         if z is None:
             return xi, P
+
+        return self.update_with_z(xi, P, z, T_IB)
+
+
+    def update_with_z(self, xi, P, z, T_IB):
+        """
+        Fold in one measurement vector
+        """
+        xi = np.asarray(xi, dtype=float).copy()
+        P = np.asarray(P, dtype=float).copy()
 
         T_BI = T_IB.T
         h, H = self.measurement_prediction(xi, T_BI)
@@ -204,6 +211,7 @@ class EKF:
         self.nis = float(y @ np.linalg.solve(S, y))
 
         return xi, P
+
 
     def __call__(self, frame, a_I, dt, phi, theta, psi):
         """

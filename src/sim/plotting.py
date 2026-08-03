@@ -1,4 +1,3 @@
-import argparse
 import os
 
 import matplotlib as mpl
@@ -518,45 +517,34 @@ def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
 
 
 # ----------------------------------------------------------------------------
-# Command line entry point: plot a run written by sim.simulation.run_sim
+# Plot one run
 # ----------------------------------------------------------------------------
-def main():
-    from sim.simulation.sim_io import DEFAULT_RESULTS, load_results
+def plot_run(run, save_dir=None, layout='panels', show=True,
+             ref_target=None):
+    """Draw every figure for one run, writing them only if `save_dir` is set.
 
-    ap = argparse.ArgumentParser(
-        description='Plot a simulation run saved by run_sim.py')
-    ap.add_argument('results', nargs='?', default=DEFAULT_RESULTS,
-                    help='.npz written by run_sim.py')
-    ap.add_argument('--save-dir', default=FIG_DIR, help='figure output folder')
-    ap.add_argument('--layout', default='panels',
-                    choices=('panels', 'grid', 'both'))
-    ap.add_argument('--no-show', dest='show', action='store_false',
-                    help='just write the files, do not open a window')
-    ap.add_argument('--ref-for', dest='ref_target', default=None,
-                    choices=sorted(REF_BODY),
-                    help='override the reference target stored in the results')
-    args = ap.parse_args()
-
-    run = load_results(args.results)
-    ref_target = args.ref_target or run['ref_target']
+    `run` holds what simulate() produced -- ts, X, P_ref, err_log, u_log --
+    plus the architecture name and the body the reference was drawn for.
+    `ref_target` overrides the latter. Returns the dict of figures.
+    """
+    ref_target = ref_target or run['ref_target']
     title = f"Nonlinear Model - {run['arch']}" if run['arch'] \
         else 'Nonlinear Model'
     title += f" ({_body_name(ref_target).lower()} reference)"
 
-    save_all(ts=run['ts'], X=run['X'], P_ref=run['P_ref'],
-             t=run['ts'], X_err=run['err_log'], U_pert=run['u_log'],
-             title=title, traj_title='Drone and Payload Trajectory',
-             save_dir=args.save_dir, layout=args.layout, verbose=True,
-             ref_target=ref_target)
-    print(f'figures written to {args.save_dir}/')
+    figs = save_all(ts=run['ts'], X=run['X'], P_ref=run['P_ref'],
+                    t=run['ts'], X_err=run['err_log'], U_pert=run['u_log'],
+                    title=title, traj_title='Drone and Payload Trajectory',
+                    save_dir=save_dir, layout=layout, verbose=True,
+                    ref_target=ref_target)
+    if save_dir:
+        print(f'figures written to {save_dir}/')
 
-    if args.show:
+    if show:
         if mpl.get_backend().lower() == 'agg':
-            print('plotting: non-interactive Agg backend, no window to open '
-                  '(figures are still saved).')
+            kept = ' (they are still saved)' if save_dir else ''
+            print('plotting: non-interactive Agg backend, no window to open'
+                  f'{kept}.')
         else:
             plt.show()   # blocks so the 3-D view stays pannable
-
-
-if __name__ == '__main__':
-    main()
+    return figs

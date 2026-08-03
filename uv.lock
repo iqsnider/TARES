@@ -981,7 +981,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tares-sitl"
+name = "tares"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -22,7 +22,7 @@ DISC_DIAMETER = 0.3 # [m]
 DISC_WIDTH = 0.0025 # [m]
 TETHER_LEN = 8 # [m]
 
-TETHER_PIVOT_OFFSET = 0 # [m] tether pivot offset from drone CG in body frame
+TETHER_PIVOT_OFFSET = np.zeros(3) # [m] tether pivot offset from drone CG in body frame
 
 
 ##### totals #####
