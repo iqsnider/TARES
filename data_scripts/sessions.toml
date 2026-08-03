@@ -17,9 +17,6 @@ pose_offset = 0.0
 L_dyn = 8.0
 L_marker = 8.31
 
-# camera intrinsics, shared by every run flown with this camera
-calibration = "~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json"
-
 
 [sessions.20260723_114556]
 pose_offset = 0.17          # NIS-minimising, mean normalised NIS 1.10

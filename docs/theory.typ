@@ -244,7 +244,7 @@ xihat_(k+1)^- = xihat_k^+ + Delta t thin f(xihat_k^+, a_s)
 $
 $
 Phi_k = I_5 + F Delta t, quad quad
-Q = "diag"(0, 0, q, q, q_psi) Delta t
+Q = "diag"(0, 0, q_x, q_y, q_psi) Delta t
 $
 $
 P_(k+1)^- = Phi_k P_k^+ Phi_k^top + Q
@@ -290,6 +290,10 @@ $
 ]
 ]
 
+#let VK = $V_k$
+#let mC = $[underline(m)]^C$
+#let ell = $underline(ell)$
+#let tBC = $underline(t)_(B C)$
 
 #block(
   stroke: 1pt + darkgreen, 
@@ -297,118 +301,137 @@ $
   inset: 10pt,
   fill: gray.lighten(80%)
 )[
-=== Geometry
+== Measurement
+=== Pre-processing logic
+
+For every $j in VK$, `solvePnP` returns the marker pose in the camera frame,
 
 $
-[underline(m)]^I = vec(cos psip, sin psip, 0), quad "assuming no roll or pitch"
-$
-
-
-#defs[
-  $[underline(m)]^I$: unit vector along the marker row \
-]
-
-=== Measurement model, $j in V_k$
-
-$
-[p_j]^I = Lm [qu]^I - o_j [underline(m)]^I
+[underline(t)_j]^C, quad [T]^(C M_j) quad quad j in VK
 $
 
 #defs[
-  $V_k$: marker IDs detected in frame $k$\
-  $Lm$: drone tether-pivot to marker-board CG\
-  $o_j$: marker offset from center along the row, +left\
-  $[p_j]^I$: position of marker j
+$VK$: marker IDs detected in frame $k$\
+$[underline(t)_j]^C$: marker $j$ center in the camera frame [m]\
+$[T]^(C M_j)$: transformation to the camera frame from the marker local frame $M_j$
 ]
 
+The first column of $[T]^(C M_j)$ is the marker $x$-axis, which runs along
+the marker row,
+
 $
-[p_j]^C = vec(X_j, Y_j, Z_j) = [C]^(C B) ([ell]^B + [C]^(B I) [p_j]^I - [t_(B C)]^B)
+[underline(m)_j]^C = [T]^(C M_j) [underline(1)]^(M_j)
+$
+
+Each marker gives its own estimate of the board center; average over the
+markers actually detected in the frame,
+
+$
+[underline(p)_"ctr"]^C = 1/m_k sum_(j in VK) ( [underline(t)_j]^C + o_j [underline(m)_j]^C )
 $
 
 #defs[
-  $[t_(B C)]^B$: camera optical center (offset due to science stick) [m]\
-  $[ell]^B$: tether pivot point offset [m]\
-]
+  $[underline(p)_"ctr"]$: payload center in the camera frame \
+  $m_k$: \# of markers in the frame\
+  $o_j$: marker offset from board center along the row, $+$left [m]\
+  ]
+
+Shift the origin from the camera optical center to the tether pivot,
 
 $
-h_j (xi) = vec(f_u X_j \/ Z_j + u_0, f_v Y_j \/ Z_j + v_0)
-$
-
-#defs[
-  $f_u, f_v, u_0, v_0$: intrinsics  [px]\
-  $h_j$: predicted pixel in image plane  
-]
-
-$
-H_j = (partial h_j (xi)) / (partial [p_j]^C) thin
-      (partial [p_j]^C) / (partial [p_j]^I) thin
-      (partial [p_j]^I) / (partial [xi]^I)
-$
-
-$
-H_j = mat(
-  f_u / Z_j, 0, -(f_u X_j) / Z_j^2;
-  0, f_v / Z_j, -(f_v Y_j) / Z_j^2
-) thin [C]^(C B) thin [C]^(B I) thin
-(Lm (partial [hat(n)]^I) / (partial xi) - o_j (partial [hat(m)]^I) / (partial xi))
+[underline(p)]^C = [underline(p)_"ctr"]^C + [T]^(C B) ( [tBC]^B - [ell]^B )
 $
 
 #defs[
-  $H_j in RR^(2 times 5)$: Jacobian of $h_j$ w.r.t. $xi$, by chain rule\
-  $[ell]^B, [t_(B C)]^B$ are constant
+  $[underline(p)]^C$: payload center after the camera offset is corrected, camera frame [m]\
+  $[tBC]^B$: camera optical center in the body frame [m]\
+  $[ell]^B$: drone tether pivot in the body frame [m]\
 ]
 
-]
-
-=== Update
+Average the payload yaw and transform into the inertial frame,
 
 $
-z^((j)) = h_j (xi) + epsilon^((j))
+[underline(m)]^I = [T]^(I B) [T]^(B C) ( 1/m_k sum_(j in VK) [underline(m)_j]^C )\
+z_(psi_P) = atantwo(m_2^I, m_1^I)
+$
+
+=== Measurment model
+
+After some pre-processing from pixels to camera frame coordinates, we measure,
+
+  $ z_k = vec(frac(p_x^C, norm(underline(p))), frac(p_y^C, norm(underline(p))), z_(psi_P)) + epsilon_k $
+
+#defs[
+    $underline(p)$: payload center position\
+    $z_(psi_p)$: measured payload yaw\
+    $epsilon_k$: measurement noise
+]
+
+=== Prediction of measurement
+Measurement predicted from swing angles,
+
+  $ h(xi) = vec(q_x^C, q_y^C, psi_P) quad quad quad [qu]^C = [T]^(C B)[T]^(B I) vec(alpha_x, alpha_y, -1) $
+
+$
+H = frac(partial h, partial xi) = vec(
+  mat(1,0,0; 0,1,0) [T]^(C B) [T]^(B I) mat(1,0,0,0,0; 0,1,0,0,0; 0,0,0,0,0),
+  mat(0, 0, 0, 0, 1)
+)
+$
+
+]
+
+#let sx = $sigma_x$
+#let sy = $sigma_y$
+#let spsi = $sigma_psi$
+#let wrap = math.op("wrap")
+
+#block(
+  stroke: 1pt + purple, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
+== Update
+
+=== Innovation
+
+$ y_k = z_k - h_k (hat(xi)_k^-) $
+
+$
+R_k = "diag"(sx^2, sy^2, spsi^2) in RR^(3 times 3)
+$
+
+$
+S_k = H_k P_k^- H_k^top + R_k in RR^(3 times 3)
 $
 
 #defs[
-  $m_k in {0,1,2,3}$: number of markers spotted in a given frame\
-  $z^((j))$: pixel logged for marker $j$ [px]\
-  $epsilon^((j))$: measurement noise
-  
+    $y_k$: innovation\
+    $S_K$: innovation covariance
+] 
+
+
+=== Kalman gain
+$
+K_k = P_k^- H_k^top S_k^(-1) in RR^(5 times 3)
+$
+
+#defs[
+  $K_k in RR^(5 times 3)$: Kalman gain\
 ]
-
 $
-z_k = vec(z^((1)), dots.v, z^((m_k))), quad
-h_k = vec(h_1, dots.v, h_(m_k)), quad
-H_k = vec(H_1, dots.v, H_(m_k)), quad
-R_k = (sdet^2 + f_u^2 sth^2) I_(2 m_k)
-$
-
-$
-z_k = h_k (xi) + epsilon_k, quad quad epsilon_k tilde.op cal(N)(0, R_k)
-$
-
-$
-y_k = z_k - h_k, quad
-S_k = H_k P_k^- H_k^top + R_k, quad
-K_k = P_k^- H_k^top S_k^(-1)
-$
-
-$
-xihat_k^+ = xihat_k^- + K_k y_k
+hat(xi)_k^+ = hat(xi)_k^- + K_k y_k, quad quad
 $
 
 $
 P_k^+ = (I_5 - K_k H_k) P_k^-
 $
 
-#defs[
-  $y_k$: innovation $quad$ $S_k$: innovation covariance $quad$ $K_k in RR^(5 times 2 m_k)$: Kalman gain\
-  $sdet$: marker detection noise [px] $quad$ $sth$: attitude 1#sym.sigma [rad]\
-]
 
 If no markers detected:
 $
-m_k = 0 quad ==> quad xihat_k^+ = xihat_k^-, quad P_k^+ = P_k^-
+xihat_k^+ = xihat_k^-, quad P_k^+ = P_k^-
 $
 
-
-
-
-
+]

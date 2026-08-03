@@ -1,11 +1,8 @@
 """Run the payload EKF against a real flight log + pose CSV."""
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import math
 import cv2
-import sim.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 import catalog
@@ -28,11 +25,15 @@ def build_inputs(fl):
 
 
 def group_frames(pose):
-    """[(t_cam, [(id,u,v),...], first_det_row_or_None, frame_df), ...] sorted by time."""
+    """[(t_cam, [(id,bx,by,bz),...], first_det_row_or_None, frame_df), ...] sorted by time.
+
+    The bearing is the PnP translation to that marker, camera frame; the filter
+    normalises it and only uses the direction.
+    """
     out = []
     for _, g in pose.groupby('frame'):
         det = g.dropna(subset=['marker_id'])
-        meas = [(int(m.marker_id), m.u_px, m.v_px) for m in det.itertuples()]
+        meas = [(int(m.marker_id), m.x, m.y, m.z) for m in det.itertuples()]
         out.append((float(g.time_s.iloc[0]), meas, det, g))
     out.sort(key=lambda kv: kv[0])
     return out
@@ -84,33 +85,12 @@ def mean_nnis(df, warmup=3.0):
     return float(np.mean(m.nis.to_numpy()/(2*m.n.to_numpy())))
 
 
-# default camera calibration; sessions.toml can override it per session
-# default camera; a session can name its own in sessions.toml
-CALIB_PATH = catalog.defaults().get("calibration", "")
-_CALIB_CACHE = {}
-
-
-def load_calibration(path=CALIB_PATH):
-    """Read calibration.json -> (mtx 3x3, dist 1-D). Cached, '~' expanded."""
-    import json
-    import os
-    path = os.path.expanduser(str(path))
-    if path not in _CALIB_CACHE:
-        with open(path) as f:
-            c = json.load(f)
-        mtx = np.asarray(c["mtx"], dtype=float)
-        dist = np.asarray(c["dist"], dtype=float).ravel()
-        _CALIB_CACHE[path] = (mtx, dist)
-    return _CALIB_CACHE[path]
-
-
-def make_params(L, L_m=8.31, calib_path=CALIB_PATH, **kw):
-    mtx, dist = load_calibration(calib_path)
+def make_params(L, L_m=8.31, **kw):
     kw.setdefault("q_alpha", 0.02**2)
     kw.setdefault("q_psi_p", 0.3**2)
-    kw.setdefault("sigma_det", 0.4)
+    kw.setdefault("sigma_bearing", math.radians(0.04))
     kw.setdefault("sigma_att", math.radians(0.5))
-    return ekfm.EKFParams(mtx, dist, L=L, L_m=L_m, **kw)
+    return ekfm.EKFParams(L=L, L_m=L_m, **kw)
 
 
 if __name__ == "__main__":
@@ -133,14 +113,13 @@ if __name__ == "__main__":
 
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
-    calib = Path(session.calibration).expanduser()
 
     t0 = time.time()
     offs = np.arange(-1.0, 2.6, 0.10)
     Ls = np.array([6.5, 7.0, 7.4, 7.8, 8.3])
     table = np.full((len(Ls), len(offs)), np.inf)
     for i, L in enumerate(Ls):
-        prm = make_params(L, calib_path=calib)
+        prm = make_params(L)
         for j, o in enumerate(offs):
             table[i, j] = mean_nnis(run(frames, inp, prm, o))
     print(f"({time.time()-t0:.0f}s)\n{'L_eff':>7} | best offset    min NIS")

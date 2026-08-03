@@ -3,8 +3,9 @@ Run the payload EKF on a recorded flight and produce:
   1. a static 3D ENU plot of drone / measured payload / EKF-estimated payload
   2. a time-series comparison of the EKF against the per-frame camera
      measurement, with occlusion shading and the 2-sigma band
-  3. an animation of the camera image plane showing measured marker pixels
-     against the EKF's predicted pixels, with a 1-sigma uncertainty ellipse
+  3. an animation of the camera-frame line of sight showing the measured
+     marker bearings against the EKF's predicted ones, with a 1-sigma
+     uncertainty ellipse
 
 The pose CSV has no wall clock, so the offset between the two logs is
 estimated by minimising NIS (see run_on_log.py) rather than guessed.
@@ -41,9 +42,6 @@ ID_COLOR = {config.LEFT_MARKER_ID: "tab:blue",
             config.CENTER_MARKER_ID: "tab:green",
             config.RIGHT_MARKER_ID: "tab:orange"}
 
-# assumed sensor size; only affects the drawn image border
-IMG_W, IMG_H = 2304, 1536
-
 
 def open_file(path):
     """Open a file with the OS default application."""
@@ -63,7 +61,7 @@ def open_file(path):
 # filter run
 # --------------------------------------------------------------------------
 def run_full(frames, inp, params, offset):
-    """Same recursion as run_on_log.run, but also records predicted pixels."""
+    """Same recursion as run_on_log.run, but also records the bearings."""
     t_fl = inp["t"]
     xi = P = None
     t_prev = None
@@ -96,18 +94,18 @@ def run_full(frames, inp, params, offset):
         for mid in IDS:
             h_j, H_j, p_C_j = ekfm.marker_prediction(
                 xi, payload.MARKER_OFFSET[mid], C_BI, params)
-            # a marker behind the camera still projects, to a mirrored point
+            # a marker behind the camera still has a bearing, a mirrored one
             pred[mid] = h_j if p_C_j[2] > 0 else None
         h_c, H_c, p_C_c = ekfm.marker_prediction(xi, 0.0, C_BI, params)
         S_c = H_c @ P @ H_c.T if p_C_c[2] > 0 else None
         if p_C_c[2] <= 0:
             h_c = None
 
-        muv = {}
-        if meas:
-            uv = ekfm.undistort_pixels([[m[1], m[2]] for m in meas], params)
-            for (mid, _, _), z in zip(meas, uv):
-                muv[int(mid)] = z
+        # what the filter was handed, as unit vectors
+        b_meas = {}
+        for mid, bx, by, bz in meas:
+            b = np.array([bx, by, bz], float)
+            b_meas[int(mid)] = b/np.linalg.norm(b)
 
         out.append(dict(t_cam=t_cam, t_flight=t, n=info["n_markers"],
                         nis=info["nis"],
@@ -120,8 +118,8 @@ def run_full(frames, inp, params, offset):
                                                  ekfm.IX_ALPHA_X]),
                         sigma_alpha_y=math.sqrt(P[ekfm.IX_ALPHA_Y,
                                                  ekfm.IX_ALPHA_Y]),
-                        n_I=ekfm.n_I(xi[ekfm.IX_ALPHA_X], xi[ekfm.IX_ALPHA_Y]),
-                        pred=pred, pred_c=h_c, S_c=S_c, meas=muv))
+                        q_I=ekfm.q_I(xi[ekfm.IX_ALPHA_X], xi[ekfm.IX_ALPHA_Y]),
+                        pred=pred, pred_c=h_c, S_c=S_c, meas=b_meas))
     return out
 
 
@@ -148,14 +146,14 @@ def direct_measurement(frames, inp, offset):
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
-        alpha_x, alpha_y = ekfm.alpha_from_n_I(
+        alpha_x, alpha_y = ekfm.alpha_from_q_I(
             ekfm.C_IB_enu(phi, theta, psi) @ p_B)
         rows.append((t_cam, alpha_x, alpha_y, len(det)))
     return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y", "n"])
 
 
 def estimated_payload_enu(records, fl, L_m):
-    """p_payload = p_drone + L_m * n_I, drone position interpolated.
+    """p_payload = p_drone + L_m * q_I, drone position interpolated.
 
     Returns (t_flight, ENU) so the caller can put the estimate on a timeline.
     """
@@ -164,23 +162,22 @@ def estimated_payload_enu(records, fl, L_m):
     E = np.interp(tf, t, fl.drone_px_meas.to_numpy())
     N = np.interp(tf, t, fl.drone_py_meas.to_numpy())
     U = np.interp(tf, t, fl.drone_pz_meas.to_numpy())
-    n = np.array([r["n_I"] for r in records])
-    return tf, np.c_[E, N, U] + L_m * n
+    q = np.array([r["q_I"] for r in records])
+    return tf, np.c_[E, N, U] + L_m * q
 
 
 def analyse(session, verbose=True):
     """Run the payload EKF over a session. Returns what the plots need.
 
     Everything the filter depends on that is not in the data itself -- the
-    clock offset, the tether lengths, the calibration -- comes off the session
-    (i.e. out of sessions.toml), so there are no paths or constants here.
+    clock offset, the tether lengths -- comes off the session (i.e. out of
+    sessions.toml), so there are no paths or constants here.
     """
     if not session.has_camera:
         raise SystemExit(f"session {session.id} has no camera data")
 
     offset = session.pose_offset
-    params = make_params(session.L_dyn, L_m=session.L_marker,
-                         calib_path=Path(session.calibration).expanduser())
+    params = make_params(session.L_dyn, L_m=session.L_marker)
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
@@ -346,15 +343,28 @@ def plot_timeseries(R, meas_df, offset, save=None):
 
 
 def animate_camera(records, save, fps=25, trail=40):
+    """Line of sight in the camera frame: the (b_x, b_y) components of the unit
+    bearings the filter is fed, against the ones it predicts.
+
+    No intrinsics are involved, so this is not the image plane; it is the same
+    view undistorted and scaled by the focal length, with the optical axis at
+    the origin. The axes are still drawn image-style, +y downward.
+    """
     fig, ax = plt.subplots(figsize=(8.2, 6.0))
-    ax.add_patch(plt.Rectangle((0, 0), IMG_W, IMG_H,
-                 fill=False, ec="0.6", lw=1.0))
-    ax.set_xlim(-60, IMG_W + 60)
-    ax.set_ylim(IMG_H + 60, -60)             # image convention: v downward
     ax.set_aspect("equal")
-    ax.set_xlabel("u [px]")
-    ax.set_ylabel("v [px]")
+    ax.set_xlabel(r"$b_x$  (camera frame, unit line of sight)")
+    ax.set_ylabel(r"$b_y$")
     ax.grid(alpha=0.2)
+    ax.axhline(0, color="0.6", lw=0.8)
+    ax.axvline(0, color="0.6", lw=0.8)
+
+    # one set of limits for the whole run, so nothing jumps between frames
+    pts = [b for r in records for b in r["meas"].values()]
+    pts += [r["pred_c"] for r in records if r["pred_c"] is not None]
+    pts = np.array([p[:2] for p in pts])
+    pad = 0.05*max(np.ptp(pts, axis=0).max(), 1e-3)
+    ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
+    ax.set_ylim(pts[:, 1].max() + pad, pts[:, 1].min() - pad)   # +y downward
 
     meas_pts = {mid: ax.plot([], [], "o", ms=9, color=ID_COLOR[mid],
                              label=f"measured {ID_NAME[mid]}")[0] for mid in IDS}
@@ -372,12 +382,12 @@ def animate_camera(records, save, fps=25, trail=40):
                   bbox=dict(fc="white", alpha=0.8, ec="0.8"))
     hist = []
 
-    def _at(artist, uv):
-        """Put a single-point artist on `uv`, or clear it when there is none."""
-        if uv is None:
+    def _at(artist, b):
+        """Put a single-point artist on `b`, or clear it when there is none."""
+        if b is None:
             artist.set_data([], [])
         else:
-            artist.set_data([uv[0]], [uv[1]])
+            artist.set_data([b[0]], [b[1]])
 
     def update(i):
         r = records[i]
@@ -398,17 +408,18 @@ def animate_camera(records, save, fps=25, trail=40):
             S = r["S_c"]
             if S is not None:
                 w, V = np.linalg.eigh(S)
-                w = np.maximum(w, 1e-9)
+                w = np.maximum(w, 1e-12)
                 ell.set_center((c[0], c[1]))
                 ell.width, ell.height = 2*np.sqrt(w[1]), 2*np.sqrt(w[0])
                 ell.angle = math.degrees(math.atan2(V[1, 1], V[0, 1]))
 
         resid = ""
-        if r["meas"] and c is not None:
-            e = [np.linalg.norm(r["meas"][m] - r["pred"][m])
+        if r["meas"]:
+            # angle between two unit vectors, small enough that the norm will do
+            e = [np.linalg.norm(r["meas"][m][:2] - r["pred"][m])
                  for m in r["meas"] if r["pred"][m] is not None]
             if e:
-                resid = f"  resid {np.mean(e):5.1f} px"
+                resid = f"  resid {math.degrees(np.mean(e)):5.2f} deg"
         txt.set_text(f"t = {r['t_cam']:6.2f} s   markers {r['n']}{resid}\n"
                      f"alpha = ({math.degrees(r['alpha_x']):+6.2f}, "
                      f"{math.degrees(r['alpha_y']):+6.2f}) deg   "
@@ -417,7 +428,7 @@ def animate_camera(records, save, fps=25, trail=40):
             [center_pt, trail_ln, ell, txt]
 
     ax.set_title(
-        "Camera image plane — measured marker centers vs EKF prediction")
+        "Camera-frame bearings — measured markers vs EKF prediction")
     anim = animation.FuncAnimation(fig, update, frames=len(records),
                                    interval=1000/fps, blit=False)
     anim.save(str(save), writer=animation.FFMpegWriter(fps=fps, bitrate=2400))
