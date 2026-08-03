@@ -1,4 +1,4 @@
-import sim.config as config
+import Prm.config as config
 
 import math
 import numpy as np

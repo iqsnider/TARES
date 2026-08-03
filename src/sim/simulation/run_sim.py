@@ -13,7 +13,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 from model import nonlinear_ode, payload_state
-import sim.config as config
+import Prm.config as config
 import sim.drone_test_only_mission_manager as mission
 from sim.simulation import control_law
 from sim.simulation.sim_io import DEFAULT_RESULTS, save_results

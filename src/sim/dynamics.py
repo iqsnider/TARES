@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from scipy.linalg import solve_continuous_are
-import sim.config as config
+import Prm.config as config
 
 HOVER_THRUST = config.MASS_TOTAL*config.GRAVITY
 

@@ -2,9 +2,9 @@ from pymavlink import mavutil
 import time
 import numpy as np
 
-import sim.config as config
+import Prm.config as config
 import sim.drone_test_only_mission_manager as mission
-import sim.SITL_dynamics as dynamics
+import sim.dynamics as dynamics
 
 from logs.flight import FlightLogger
 from payload_tracking.aruco_lib import MarkerPoseRecorder

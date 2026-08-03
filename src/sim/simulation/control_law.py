@@ -1,6 +1,6 @@
 import numpy as np
 
-import sim.config as config
+import Prm.config as config
 import sim.dynamics as dynamics
 from sim.payload_mission_manager import tether_equilibrium_state
 

@@ -8,46 +8,17 @@ camera position on drone -> payload position in drone reference frame
                                                 |
                                                 V
 drone position/attitude csv -> payload position in inertial reference frame
+
+The first step, marker poses -> payload center in the camera frame, is
+pre_process.get_payload_center_in_camera_frame; everything downstream of it
+is here.
 """
 import numpy as np
 import csv
 import pandas as pd
-import cv2
 
-import sim.config as config
-
-MARKER_OFFSET = {config.LEFT_MARKER_ID: config.MARKER_CENTER_TO_CENTER_DIST,
-          config.CENTER_MARKER_ID: 0,
-          config.RIGHT_MARKER_ID: -config.MARKER_CENTER_TO_CENTER_DIST}
-
-
-def get_payload_center_in_camera_frame(frame):
-    """
-    Computes the payload position in the camera reference frame from the available data in a frame (picture)
-    """
-    # array of center estimates
-    center_estimates = []
-
-    # separate the markers detected in each frame
-    markers_detected = frame.dropna(subset=["marker_id"]).itertuples()
-    for marker in markers_detected:
-        # get the rotation matrix
-        R, _ = cv2.Rodrigues(np.array([marker.rx, marker.ry, marker.rz]))
-
-        # position
-        t = np.array([marker.x, marker.y, marker.z])
-
-        offset = MARKER_OFFSET[int(marker.marker_id)]
-
-        center_estimate = t + offset*R[:, 0]
-        center_estimates.append(center_estimate)
-
-    if not center_estimates:
-        return None
-
-    approx_center = np.mean(center_estimates, axis=0)
-
-    return approx_center
+import Prm.config as config
+from sim.estimation.pre_process import get_payload_center_in_camera_frame
 
 
 def get_payload_center_in_drone_frame(payload_center_in_camera_frame):
@@ -108,7 +79,10 @@ def get_payload_position_ENU(frame, drone_position_attitude):
     """
     Computes the payload position in the inertial frame ENU
     """
-    payload_center_in_camera_frame = get_payload_center_in_camera_frame(frame)
+    detection = get_payload_center_in_camera_frame(frame)
+    if detection is None:
+        return None
+    payload_center_in_camera_frame, _ = detection
     payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame)
     payload_center_in_inertial_frame = get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_position_attitude)
 
@@ -167,7 +141,7 @@ if __name__ == "__main__":
     example_position_attitude = get_attitude_at(drone_df, example_frame.time_s.iloc[0],
                                                 time_offset=TIME_OFFSET)
 
-    payload_center_in_camera_frame = get_payload_center_in_camera_frame(example_frame)
+    payload_center_in_camera_frame, _ = get_payload_center_in_camera_frame(example_frame)
     payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame)
     payload_center_in_inertial_frame = get_payload_center_in_inertial_frame(payload_center_in_drone_frame, example_position_attitude)
 

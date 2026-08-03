@@ -4,103 +4,59 @@ Run the payload EKF on a recorded flight and produce:
   2. a time-series comparison of the EKF against the per-frame camera
      measurement -- swing angles and payload yaw -- with occlusion shading
      and the 2-sigma band
-  3. an animation of the camera-frame line of sight showing the measured
-     payload-center bearing against the EKF's predicted one, with a 1-sigma
-     uncertainty ellipse
 
 The pose CSV has no wall clock, so the offset between the two logs is
 estimated by minimising NIS (see run_on_log.py) rather than guessed.
 """
 import math
-import os
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
-import matplotlib.animation as animation
 
-import sim.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
+import sim.estimation.pre_process as pp
 from sim.plotting import TimeSlider, configure_plot_style
 import catalog
-from run_on_log import build_inputs, dof, group_frames, make_params
+from run_on_log import build_inputs, group_frames, make_ekf
 
 configure_plot_style()   # shared serif / Computer Modern theme
-
-G = 9.80665
-IDS = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]
-ID_NAME = {config.LEFT_MARKER_ID: "LEFT 232",
-           config.CENTER_MARKER_ID: "CENTER 245",
-           config.RIGHT_MARKER_ID: "RIGHT 233"}
-ID_COLOR = {config.LEFT_MARKER_ID: "tab:blue",
-            config.CENTER_MARKER_ID: "tab:green",
-            config.RIGHT_MARKER_ID: "tab:orange"}
-
-
-def open_file(path):
-    """Open a file with the OS default application."""
-    path = str(path)
-    try:
-        if sys.platform == "darwin":
-            subprocess.run(["open", path], check=False)
-        elif sys.platform.startswith("win"):
-            os.startfile(path)                                  # noqa: S606
-        else:
-            subprocess.run(["xdg-open", path], check=False)
-    except Exception as e:                                      # noqa: BLE001
-        print(f"could not open {path}: {e}")
 
 
 # --------------------------------------------------------------------------
 # filter run
 # --------------------------------------------------------------------------
-def run_full(frames, inp, params, offset):
-    """Same recursion as run_on_log.run, but also records the bearings."""
+def run_full(frames, inp, offset, L=None):
+    """Same recursion as run_on_log.run, keeping every state the plots want."""
     t_fl = inp["t"]
-    xi = P = None
+    filt = None
     t_prev = None
     out = []
-    for t_cam, p_C, C_CM, det in frames:
+    for t_cam, g, det in frames:
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
-        f_I = np.array([np.interp(t, t_fl, inp["f_I"][:, k]) for k in range(3)])
+        a_I = np.array([np.interp(t, t_fl, inp["a_I"][:, k]) for k in range(3)])
 
-        if xi is None:
-            if p_C is None:
+        if filt is None:
+            seed = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi))
+            if seed is None:
                 continue
-            xi, P = ekfm.initial_state(p_C, phi, theta, psi, params, C_CM=C_CM)
+            filt = make_ekf(phi, theta, psi, *seed, L=L)
             t_prev = t_cam
             continue
 
         dt = min(max(t_cam - t_prev, 1e-3), 0.5)
         t_prev = t_cam
-        xi, P, info = ekfm.ekf(xi, P, f_I, dt, params, p_C_payload=p_C,
-                               phi=phi, theta=theta, psi=psi, C_CM=C_CM)
+        filt.nis = None
+        xi, P = filt(g, a_I, dt, phi, theta, psi)
 
-        C_BI = ekfm.C_IB_enu(phi, theta, psi).T
-        h, H = ekfm.measurement_prediction(xi, C_BI, params)
-        pred_c = h[:2]
-        S_c = H[:2] @ P @ H[:2].T
-
-        # the one bearing the filter is fed, and the individual markers behind
-        # it, all from the pivot so they share the prediction's origin
-        b_meas = None if p_C is None else ekfm.bearing_from_p_C(p_C, params)
-        b_markers = {int(m.marker_id):
-                     ekfm.bearing_from_p_C([m.x, m.y, m.z], params)
-                     for m in det.itertuples()}
-
-        out.append(dict(t_cam=t_cam, t_flight=t, n=len(det),
-                        dof=dof(C_CM), nis=info["nis"],
+        out.append(dict(t_cam=t_cam, t_flight=t, n=len(det), nis=filt.nis,
                         alpha_x=xi[ekfm.IX_ALPHA_X],
                         alpha_y=xi[ekfm.IX_ALPHA_Y],
                         alpha_dot_x=xi[ekfm.IX_ALPHA_DOT_X],
@@ -111,37 +67,33 @@ def run_full(frames, inp, params, offset):
                         sigma_alpha_y=math.sqrt(P[ekfm.IX_ALPHA_Y,
                                                  ekfm.IX_ALPHA_Y]),
                         sigma_psi_p=math.sqrt(P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]),
-                        q_I=ekfm.q_I(xi[ekfm.IX_ALPHA_X], xi[ekfm.IX_ALPHA_Y]),
-                        pred_c=pred_c, S_c=S_c, b_meas=b_meas,
-                        meas=b_markers))
+                        q_I=filt.q_I(xi[ekfm.IX_ALPHA_X],
+                                     xi[ekfm.IX_ALPHA_Y])))
     return out
 
 
-def direct_measurement(frames, inp, params, offset):
+def direct_measurement(frames, inp, offset):
     """
     Per-frame swing angles straight from the PnP chain, no filtering.
     This is the orange scatter the EKF gets compared against. It is not
     truth -- it carries the same attitude error plus PnP depth noise.
 
-    Same chain the filter is initialised from, so the two are comparable.
+    The same pre-processing the filter is fed, so the two are exactly
+    comparable.
     """
     t_fl = inp["t"]
     rows = []
-    for t_cam, p_C, C_CM, det in frames:
-        if p_C is None:
-            continue
+    for t_cam, g, det in frames:
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
-        b_C = ekfm.bearing_from_p_C(p_C, params)
-        alpha_x, alpha_y = ekfm.alpha_from_q_I(
-            ekfm.C_IB_enu(phi, theta, psi) @ (params.C_BC @ b_C))
-        psi_p = np.nan if C_CM is None else ekfm.yaw_from_C_CM(
-            C_CM, ekfm.C_IB_enu(phi, theta, psi), params)
-        rows.append((t_cam, alpha_x, alpha_y, psi_p, len(det)))
+        m = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi))
+        if m is None:
+            continue
+        rows.append((t_cam, *m, len(det)))
     return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y",
                                        "psi_p", "n"])
 
@@ -171,12 +123,11 @@ def analyse(session, verbose=True):
         raise SystemExit(f"session {session.id} has no camera data")
 
     offset = session.pose_offset
-    params = make_params(session.L_dyn)
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
-    records = run_full(frames, inp, params, offset)
-    meas_df = direct_measurement(frames, inp, params, offset)
+    records = run_full(frames, inp, offset, L=session.L_dyn)
+    meas_df = direct_measurement(frames, inp, offset)
     if verbose:
         print(f"{len(records)} filter steps, "
               f"{sum(r['n'] > 0 for r in records)} with a measurement")
@@ -186,13 +137,13 @@ def analyse(session, verbose=True):
     pdf = payload.get_payload_ENU_from_data(session.pose, session.flight,
                                             time_offset=offset)
     return dict(records=records, meas_df=meas_df, R=R, est_t=est_t, est=est,
-                pdf=pdf, offset=offset, params=params)
+                pdf=pdf, offset=offset)
 
 
 def summarise(records, meas_df):
     """Print the numbers worth checking after every run."""
     R = pd.DataFrame([{k: v for k, v in r.items()
-                       if k in ("t_cam", "n", "dof", "nis",
+                       if k in ("t_cam", "n", "nis",
                                 "alpha_x", "alpha_y", "psi_p",
                                 "sigma_alpha_x", "sigma_alpha_y",
                                 "sigma_psi_p")}
@@ -207,7 +158,7 @@ def summarise(records, meas_df):
     print(f"  alpha_y RMS vs direct measurement : "
           f"{np.rad2deg(np.sqrt(np.mean((R.alpha_y[sel]-mj[sel])**2))):.3f} deg")
     print(f"  mean normalised NIS               : "
-          f"{np.mean(warm.nis/warm.dof):.3f}  (target 1.0)")
+          f"{np.mean(warm.nis/ekfm.MEAS_DIM):.3f}  (target 1.0)")
     print(f"  mean 1-sigma alpha                : "
           f"{np.rad2deg(R.sigma_alpha_x[sel].mean()):.3f}, "
           f"{np.rad2deg(R.sigma_alpha_y[sel].mean()):.3f} deg")
@@ -348,100 +299,6 @@ def plot_timeseries(R, meas_df, offset, save=None):
     return fig
 
 
-def animate_camera(records, save, fps=25, trail=40):
-    """Line of sight in the camera frame: the (b_x, b_y) the filter is fed
-    against the one it predicts.
-
-    The filter now sees a single bearing, to the payload board center. The
-    individual markers are drawn behind it for context -- which ones PnP had
-    to work with -- shifted to the same pivot origin as the prediction.
-
-    No intrinsics are involved, so this is not the image plane; it is the same
-    view undistorted and scaled by the focal length, with the optical axis at
-    the origin. The axes are still drawn image-style, +y downward.
-    """
-    fig, ax = plt.subplots(figsize=(8.2, 6.0))
-    ax.set_aspect("equal")
-    ax.set_xlabel(r"$b_x$  (camera frame, unit line of sight)")
-    ax.set_ylabel(r"$b_y$")
-    ax.grid(alpha=0.2)
-    ax.axhline(0, color="0.6", lw=0.8)
-    ax.axvline(0, color="0.6", lw=0.8)
-
-    # one set of limits for the whole run, so nothing jumps between frames
-    pts = [b for r in records for b in r["meas"].values()]
-    pts += [r["pred_c"] for r in records]
-    pts = np.array([p[:2] for p in pts])
-    pad = 0.05*max(np.ptp(pts, axis=0).max(), 1e-3)
-    ax.set_xlim(pts[:, 0].min() - pad, pts[:, 0].max() + pad)
-    ax.set_ylim(pts[:, 1].max() + pad, pts[:, 1].min() - pad)   # +y downward
-
-    meas_pts = {mid: ax.plot([], [], "o", ms=8, color=ID_COLOR[mid], alpha=0.55,
-                             label=f"detected {ID_NAME[mid]}")[0] for mid in IDS}
-    board_pt, = ax.plot([], [], "+", ms=14, mew=2.2, color="k",
-                        label="measured payload center")
-    center_pt, = ax.plot([], [], "*", ms=16, color="tab:red",
-                         label="EKF predicted center")
-    trail_ln, = ax.plot([], [], "-", lw=1.0, color="tab:red", alpha=0.5)
-    ell = Ellipse((0, 0), 1, 1, fc="tab:red", alpha=0.18, ec="tab:red", lw=1.0)
-    ax.add_patch(ell)
-    ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
-    txt = ax.text(0.02, 0.02, "", transform=ax.transAxes, fontsize=9,
-                  va="bottom", family="monospace",
-                  bbox=dict(fc="white", alpha=0.8, ec="0.8"))
-    hist = []
-
-    def _at(artist, b):
-        """Put a single-point artist on `b`, or clear it when there is none."""
-        if b is None:
-            artist.set_data([], [])
-        else:
-            artist.set_data([b[0]], [b[1]])
-
-    def update(i):
-        r = records[i]
-        # the dots come and go with the detections; the prediction is always
-        # drawn, so the coasting through an occlusion is visible
-        for mid in IDS:
-            _at(meas_pts[mid], r["meas"].get(mid))
-        _at(board_pt, r["b_meas"])
-
-        c = r["pred_c"]
-        _at(center_pt, c)
-        hist.append(c)
-        del hist[:-trail]
-        hh = np.array(hist)
-        trail_ln.set_data(hh[:, 0], hh[:, 1])
-
-        w, V = np.linalg.eigh(r["S_c"])
-        w = np.maximum(w, 1e-12)
-        ell.set_center((c[0], c[1]))
-        ell.width, ell.height = 2*np.sqrt(w[1]), 2*np.sqrt(w[0])
-        ell.angle = math.degrees(math.atan2(V[1, 1], V[0, 1]))
-
-        resid = ""
-        if r["b_meas"] is not None:
-            # angle between two unit vectors, small enough that the norm will do
-            e = np.linalg.norm(r["b_meas"][:2] - c)
-            resid = f"  resid {math.degrees(e):5.2f} deg"
-        txt.set_text(f"t = {r['t_cam']:6.2f} s   markers {r['n']}{resid}\n"
-                     f"alpha = ({math.degrees(r['alpha_x']):+6.2f}, "
-                     f"{math.degrees(r['alpha_y']):+6.2f}) deg   "
-                     f"1sig {math.degrees(r['sigma_alpha_x']):.2f} deg   "
-                     f"psi_P {math.degrees(r['psi_p']):+7.2f} deg")
-        return list(meas_pts.values()) + [board_pt, center_pt, trail_ln,
-                                          ell, txt]
-
-    ax.set_title(
-        "Camera-frame bearing — measured payload center vs EKF prediction")
-    anim = animation.FuncAnimation(fig, update, frames=len(records),
-                                   interval=1000/fps, blit=False)
-    anim.save(str(save), writer=animation.FFMpegWriter(fps=fps, bitrate=2400))
-    plt.close(fig)
-    print("wrote", save)
-    return save
-
-
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
@@ -450,9 +307,7 @@ if __name__ == "__main__":
     ap.add_argument("selector", nargs="?", default="latest.cam",
                     help="which session (see `uv run plot.py ls`)")
     ap.add_argument("--save", metavar="DIR", default=None,
-                    help="write the figures and video here")
-    ap.add_argument("--no-video", action="store_true",
-                    help="skip the camera animation, which is slow")
+                    help="write the figures here")
     args = ap.parse_args()
 
     session = catalog.resolve(args.selector)
@@ -469,11 +324,5 @@ if __name__ == "__main__":
             save=out and out / f"{session.id}_ekf_3d.png")
     plot_timeseries(r["R"], r["meas_df"], r["offset"],
                     save=out and out / f"{session.id}_ekf_timeseries.png")
-
-    if not args.no_video:
-        mp4 = ((out / f"{session.id}_camera_view.mp4") if out else
-               Path(tempfile.mkdtemp(prefix="tares_")) / "camera_view.mp4")
-        animate_camera(r["records"], mp4)
-        open_file(mp4)
 
     plt.show()   # interactive, so the 3-D view can be panned

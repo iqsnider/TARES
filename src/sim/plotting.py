@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Slider
 
-from sim.config import TETHER_LEN, GRAVITY, MASS_TOTAL
-import sim.config as config
+from Prm.config import TETHER_LEN, GRAVITY, MASS_TOTAL
+import Prm.config as config
 
 HOVER_THRUST = MASS_TOTAL * GRAVITY
 

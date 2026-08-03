@@ -14,7 +14,6 @@ actually want files. See catalog.py for how sessions are found and selected.
 """
 import argparse
 import sys
-import tempfile
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -67,19 +66,7 @@ def kind_ekf(s, save):
                               save=_out(save, f"{s.id}_ekf_timeseries.png"))
 
 
-def kind_video(s, save):
-    """Camera image plane animation. Always a file -- there is no other form."""
-    import ekf_plots
-    r = ekf_plots.analyse(s)
-    path = _out(save, f"{s.id}_camera_view.mp4")
-    if path is None:
-        path = Path(tempfile.mkdtemp(prefix="tares_")) / f"{s.id}_camera.mp4"
-    ekf_plots.animate_camera(r["records"], path)
-    ekf_plots.open_file(path)
-
-
-KINDS = {"drone": kind_drone, "traj": kind_traj,
-         "ekf": kind_ekf, "video": kind_video}
+KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf}
 
 
 # ----------------------------------------------------------------------------

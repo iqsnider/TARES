@@ -1,5 +1,5 @@
 import numpy as np
-from sim.config import (GRID_X_START, GRID_Y_START,
+from Prm.config import (GRID_X_START, GRID_Y_START,
                         GRID_X_END, GRID_ALTITUDE,
                         CRUISE_SPEED)
 

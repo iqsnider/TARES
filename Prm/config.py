@@ -22,6 +22,8 @@ DISC_DIAMETER = 0.3 # [m]
 DISC_WIDTH = 0.0025 # [m]
 TETHER_LEN = 8 # [m]
 
+TETHER_PIVOT_OFFSET = 0 # [m] tether pivot offset from drone CG in body frame
+
 
 ##### totals #####
 # the tether hangs off the drone, so its mass rides with the payload in the

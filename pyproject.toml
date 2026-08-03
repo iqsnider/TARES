@@ -27,4 +27,5 @@ packages = ["src/sim",
     "src/logs",
     "src/sim/estimation",
     "src/sim/simulation",
-    "src/sim/simulation/model"]
+    "src/sim/simulation/model",
+    "Prm"]
