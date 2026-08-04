@@ -236,7 +236,7 @@ class _MJPEGPreview:
 
 class MarkerPoseRecorder:
     def __init__(self,
-                 calibration_path="~/TARES_SITL/src/payload_tracking/camera_calibration/calibration.json",
+                 calibration_path="~/TARES/src/payload_tracking/camera_calibration/calibration.json",
                  marker_size_m=0.14,
                  video_out="recording.avi",
                  csv_out="poses.csv",

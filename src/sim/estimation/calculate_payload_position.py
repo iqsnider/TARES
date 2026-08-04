@@ -129,7 +129,7 @@ def get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=0
 if __name__ == "__main__":
     # 23 Jul 2026, last test of the day. data_scripts/runs.py is the shared
     # definition; spelled out here so this file stays runnable on its own.
-    RUN_DIR = "~/TARES_SITL/data/test_07232026/all_data_07232026"
+    RUN_DIR = "~/TARES/data/test_07232026/all_data_07232026"
     payload_pose_file = f"{RUN_DIR}/step_test_with_camera_20260723_114555/poses.csv"
     flight_data_file = f"{RUN_DIR}/flight_20260723_114556.csv"
     TIME_OFFSET = 0.17   # pose clock -> flight clock, NIS-minimising

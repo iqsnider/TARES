@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     # validate path on the ground = safety
     path = os.path.expanduser(
-        "~/TARES_SITL/waypoints/simtest.waypoints")
+        "~/TARES/waypoints/simtest.waypoints")
     ref, total_time = mission.trajectory_from_waypoint_file(path, speed=0.5)
 
     # dry-run check before committing to flight

@@ -46,13 +46,15 @@ def as_payload_reference(ref, ref_target):
     return ref
 
 
-def initial_state(pl_ref):
+def initial_state(pl_ref, pert=None):
     """
     Drone hovering at rest with the payload hanging on the t=0 reference
     """
     x0 = np.zeros(16)
     p_pl0, _ = pl_ref(0)
     x0[0:3] = p_pl0 + np.array([0, 0, config.TETHER_LEN])
+    if pert is not None:
+        x0 = x0 + pert
     return x0
 
 def synthetic_measurement(x, T_IB, sigma_xy, sigma_yaw, rng, psi_p=0):
@@ -73,8 +75,9 @@ def synthetic_measurement(x, T_IB, sigma_xy, sigma_yaw, rng, psi_p=0):
     return z
 
 
-def simulate(architecture, ref, dt=0.02, ekf=False, ref_target='payload',
-             cam_every=5):
+def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_target='payload',
+             cam_every=config.CONTROL_FREQUENCY // 30):
+
     if ref_target not in REF_TARGETS:
         raise ValueError(f'ref_target must be one of {REF_TARGETS}')
 
@@ -85,30 +88,33 @@ def simulate(architecture, ref, dt=0.02, ekf=False, ref_target='payload',
     err_log = np.zeros((16, len(ts)))
     u_log = np.zeros((4, len(ts)))
     xi_log = np.zeros((5, len(ts)))
-    X[0] = initial_state(pl_ref)
+    var_log = np.zeros((5, len(ts)))
 
-    filt = rng = None
+    pert = np.zeros(16)
+    pert[12] = math.radians(30)
+    pert[13] = math.radians(20)
+
+    X[0] = initial_state(pl_ref, pert)
+    filt = EKF(0, 0, 0, 0, 0, 0)
+    rng = np.random.default_rng(0)
     a_prev = np.zeros(3)
-    if ekf:
-        filt = EKF(0, 0, 0, X[0, 12], X[0, 13], 0)
-        rng = np.random.default_rng(0)
 
     for i, t in enumerate(ts):
         x = X[i]
 
-        if filt is not None:
-            T_IB = T_IB_fn(x[6], x[7], x[8])
-            filt.xi, filt.P = filt.ekf_predict(filt.xi, filt.P, a_prev, dt)
-            if i % cam_every == 0:
-                z = synthetic_measurement(x, T_IB, filt.sigma_xy,
-                                          filt.sigma_yaw, rng)
-                filt.xi, filt.P = filt.update_with_z(filt.xi, filt.P, z, T_IB)
-            xi_log[:, i] = filt.xi
+        T_IB = T_IB_fn(x[6], x[7], x[8])
+        filt.xi, filt.P = filt.ekf_predict(filt.xi, filt.P, a_prev, dt)
+        if i % cam_every == 0:
+            z = synthetic_measurement(x, T_IB, filt.sigma_xy,
+                                      filt.sigma_yaw, rng)
+            filt.xi, filt.P = filt.update_with_z(filt.xi, filt.P, z, T_IB)
+        xi_log[:, i] = filt.xi
+        var_log[:, i] = np.diag(filt.P)
 
+        x_hat = x
+        if ekf:
             x_hat = x.copy()
             x_hat[12:16] = filt.xi[0:4]
-        else:
-            x_hat = x
 
         u, e = architecture(x_hat, t, pl_ref)
         xdot = nonlinear_ode(x, u)
@@ -127,7 +133,7 @@ def simulate(architecture, ref, dt=0.02, ekf=False, ref_target='payload',
     err_log[0:3] = (p_tgt - P_ref).T
     err_log[3:6] = (v_tgt - np.array([ref(t)[1] for t in ts])).T
 
-    return ts, X, P_ref, err_log, u_log, xi_log
+    return ts, X, P_ref, err_log, u_log, xi_log, var_log
 
 
 
@@ -142,15 +148,12 @@ def main():
                     dest='ref_target',
                     help='which body the reference trajectory is drawn for')
 
-    ap.add_argument('--layout', default='panels',
-                    choices=('panels', 'grid', 'both'))
-
     ap.add_argument('--ekf', action="store_true")
 
     args = ap.parse_args()
 
-    startPointHoverTime = 5
-    endPointHoverTime = 5 
+    startPointHoverTime = 10
+    endPointHoverTime = 10
     architecture = control_law.build(args.arch)
 
     ref = mission.ReferenceTrajectory(p_start=np.array([0, 0, 15]),
@@ -159,15 +162,16 @@ def main():
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)
 
-    ts, X, P_ref, err_log, u_log, xi_log = simulate(architecture, ref,ekf=args.ekf, ref_target=args.ref_target)
+    ts, X, P_ref, err_log, u_log, xi_log, var_log = simulate(architecture, ref,ekf=args.ekf, ref_target=args.ref_target)
 
     print(f'{args.arch} ({args.ref_target} reference): {len(ts)} samples '
           f'over {ts[-1]:.1f} s')
 
     plotting.plot_run(dict(ts=ts, X=X, P_ref=P_ref, err_log=err_log,
-                           u_log=u_log, arch=args.arch,
+                           u_log=u_log, xi_log=xi_log, var_log=var_log,
+                           arch=args.arch,
                            ref_target=args.ref_target),
-                      layout=args.layout)
+                      layout="panels")
 
 
 if __name__ == '__main__':

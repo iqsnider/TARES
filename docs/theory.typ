@@ -320,7 +320,7 @@ The first column of $[T]^(C M_j)$ is the marker $x$-axis, which runs along
 the marker row,
 
 $
-[underline(m)_j]^C = [T]^(C M_j) [underline(1)]^(M_j)
+[underline(m)_j]^C = [T]^(C M_j) [underline(1)^(M_j)]^(M_j)
 $
 
 Each marker gives its own estimate of the board center; average over the
@@ -408,6 +408,7 @@ $
 
 #defs[
     $y_k$: innovation\
+    $R_k$: measurement noise\
     $S_K$: innovation covariance
 ] 
 

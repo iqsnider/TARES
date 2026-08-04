@@ -24,7 +24,7 @@ from functools import cached_property
 from pathlib import Path
 
 # Root of the archive. Point TARES_DATA elsewhere to work off a copy.
-DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES_SITL/data")).expanduser()
+DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
 
 # Hand-written facts that no filename knows.
 META_FILE = Path(__file__).with_name("sessions.toml")

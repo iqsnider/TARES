@@ -4,13 +4,17 @@ Run the payload EKF on a recorded flight and produce:
   2. a time-series comparison of the EKF against the per-frame camera
      measurement -- swing angles and payload yaw -- with occlusion shading
      and the 2-sigma band
+  3. with --cam, the camera recording written back out as an .avi with the
+     estimated payload position drawn on every frame
 
 The pose CSV has no wall clock, so the offset between the two logs is
 estimated by minimising NIS (see run_on_log.py) rather than guessed.
 """
+import json
 import math
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,11 +22,25 @@ import matplotlib.pyplot as plt
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
-from sim.plotting import TimeSlider, configure_plot_style
+from sim.plotting import (TimeSlider, configure_plot_style,
+                          C_REF, C_DRONE, C_PAYLOAD)
 import catalog
 from run_on_log import build_inputs, group_frames, make_ekf
 
 configure_plot_style()   # shared serif / Computer Modern theme
+
+# The simulation figure draws its EKF payload track in teal; on real data it
+# stays green, so the two are not mistaken for each other.
+C_EST = "#009E73"
+
+# The intrinsics the poses were solved with, so the overlay lands where the
+# tracker thought the marker was.
+CALIB_FILE = (Path(__file__).resolve().parents[1] /
+              "src/payload_tracking/camera_calibration/calibration.json")
+
+# BGR. C_EST itself is too dark to read against sunlit ground, so the video
+# uses a bright lime of the same family and leans on a black outline.
+BGR_EST = (60, 255, 80)
 
 
 # --------------------------------------------------------------------------
@@ -57,6 +75,8 @@ def run_full(frames, inp, offset, L=None):
         xi, P = filt(g, a_I, dt, phi, theta, psi)
 
         out.append(dict(t_cam=t_cam, t_flight=t, n=len(det), nis=filt.nis,
+                        frame=int(g.frame.iloc[0]),
+                        xi=xi.copy(), P=P.copy(), T_IB=filt.T_IB.copy(),
                         alpha_x=xi[ekfm.IX_ALPHA_X],
                         alpha_y=xi[ekfm.IX_ALPHA_Y],
                         alpha_dot_x=xi[ekfm.IX_ALPHA_DOT_X],
@@ -199,39 +219,51 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
 
     fig = plt.figure(figsize=(9.5, 8.5))
     ax = fig.add_subplot(111, projection="3d")
-    drone_ln, = ax.plot(E, N, U, color="#4c72b0", lw=1.8, label="drone")
+    drone_ln, = ax.plot(E, N, U, color=C_DRONE, lw=2.0, label="Drone")
     ref_ln = None
     if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(fl.columns):
         ref_ln, = ax.plot(fl.drone_px_ref, fl.drone_py_ref, fl.drone_pz_ref,
-                          "k--", lw=1.2, label="reference")
+                          color=C_REF, lw=1.6, linestyle=(0, (5, 4)),
+                          label="Drone reference")
 
     finite = np.flatnonzero(np.isfinite(pE))
     tethers = [ax.plot([E[k], pE[k]], [N[k], pN[k]], [U[k], pU[k]],
-                       color="0.7", lw=0.5, alpha=0.7)[0]
-               for k in finite[::25]]
+                       color="#5F6368", lw=0.9, alpha=0.35,
+                       label="Tether (snapshots)" if j == 0 else None)[0]
+               for j, k in enumerate(finite[::25])]
 
-    meas_ln, = ax.plot(pE, pN, pU, color="tab:orange", lw=1.0, alpha=0.85,
-                       label="payload (camera measurement)")
+    meas_ln, = ax.plot(pE, pN, pU, color=C_PAYLOAD, lw=1.4, alpha=0.85,
+                       label="Payload (camera measurement)")
     est_ln, = ax.plot(est_enu[:, 0], est_enu[:, 1], est_enu[:, 2],
-                      color="tab:red", lw=1.8, label="payload (EKF estimate)")
+                      color=C_EST, lw=2.0, label="Payload (EKF estimate)")
 
     # the tether where the slider is; static until a slider is attached
     live_tether, = ax.plot([E[-1], est_enu[-1, 0]], [N[-1], est_enu[-1, 1]],
-                           [U[-1], est_enu[-1, 2]], color="0.3", lw=1.6,
-                           label="tether (at t)")
+                           [U[-1], est_enu[-1, 2]], color="#3C4043", lw=1.8,
+                           label="Tether (at $t$)")
 
-    ax.scatter([E[0]], [N[0]], [U[0]], c="k", s=40, label="start")
-    head, = ax.plot([E[-1]], [N[-1]], [U[-1]], "s", ms=7, color="k",
-                    mec="white", mew=0.8, label="drone at t")
+    start_pt = ax.scatter([E[0]], [N[0]], [U[0]], color="#2CA02C",
+                          edgecolors="white", linewidths=0.8, marker="^",
+                          s=90, depthshade=False, label="Start")
+    head, = ax.plot([E[-1]], [N[-1]], [U[-1]], marker="s", ms=8,
+                    color="#222222", mec="white", mew=0.8, linestyle="none",
+                    label="End")
     ax.set_xlabel("East [m]")
     ax.set_ylabel("North [m]")
     ax.set_zlabel("Up [m]")
-    ax.set_title("Drone and payload, ENU camera measurement vs EKF estimate")
+    ax.set_title("Experiment: Drone and Payload, "
+                 "Camera Measurement vs EKF")
     _set_equal_3d(ax,
                   np.concatenate([E, pE[finite], est_enu[:, 0]]),
                   np.concatenate([N, pN[finite], est_enu[:, 1]]),
                   np.concatenate([U, pU[finite], est_enu[:, 2]]))
-    ax.legend(fontsize=8, loc="upper left")
+
+    # same running order as the simulation figure, which draws its artists in
+    # a different sequence than this one does
+    order = [ref_ln, drone_ln, meas_ln, est_ln,
+             tethers[0] if tethers else None, live_tether, start_pt, head]
+    ax.legend(handles=[h for h in order if h is not None],
+              fontsize=13.5, loc="upper left")
     fig.tight_layout()
     if save:
         fig.savefig(save, dpi=120)
@@ -297,6 +329,153 @@ def plot_timeseries(R, meas_df, offset, save=None):
         fig.savefig(save, dpi=115)
         print("wrote", save)
     return fig
+
+
+# --------------------------------------------------------------------------
+# camera overlay
+# --------------------------------------------------------------------------
+OVERLAY_SUFFIX = "_ekf_overlay.avi"
+
+
+def find_recording(session):
+    """The video the recorder wrote beside a session's poses.csv, if kept.
+
+    Only the pose folder itself is searched, not below it: what sits in an
+    output subfolder is something a script drew, not the flight. Overlays this
+    one wrote earlier are skipped too, so a re-run cannot draw on its own
+    output.
+    """
+    vids = sorted(p for ext in ("*.avi", "*.mp4", "*.mkv")
+                  for p in session.pose.parent.glob(ext)
+                  if not p.name.endswith(OVERLAY_SUFFIX))
+    return vids[0] if vids else None
+
+
+def _intrinsics():
+    """The camera matrix and distortion the poses were solved with.
+
+    Used unscaled even though the recording is larger than the calibration
+    resolution: the recorder solved PnP with this matrix on these frames, and
+    reprojecting its own points lands within a pixel of the u_px/v_px it
+    logged, so this is the mapping the video is actually in.
+    """
+    with open(CALIB_FILE) as f:
+        calib = json.load(f)
+    return (np.array(calib["mtx"], dtype=float),
+            np.array(calib["dist"], dtype=float))
+
+
+def _label(frame, c, lines, gap=14, scale=1.15, thick=3):
+    """Write `lines` up and to the right of the point at `c`.
+
+    Nudged back inside the frame when the payload swings near an edge, so the
+    readout never runs off the picture.
+    """
+    step = int(34*scale)
+    x = c[0] + gap
+    y = c[1] - gap - step*(len(lines) - 1)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    width = max(cv2.getTextSize(s, font, scale, thick)[0][0] for s in lines)
+    x = min(x, frame.shape[1] - width - 4)
+    y = max(y, step)
+
+    for k, text in enumerate(lines):
+        at = (x, y + k*step)
+        cv2.putText(frame, text, at, font, scale, (0, 0, 0), thick + 3,
+                    cv2.LINE_AA)
+        cv2.putText(frame, text, at, font, scale, BGR_EST, thick, cv2.LINE_AA)
+
+
+def _heading_tip(filt, rec, K, D, center, horizon, step=0.05):
+    """Tip of an arrow along the payload's current direction of travel.
+
+    The swing is nudged one short `step` ahead and projected through the same
+    call as the estimate itself, which gives the direction in the picture; that
+    is then stretched to the distance `horizon` seconds of it would cover, so
+    the arrow grows with speed. Reading the direction off a short step rather
+    than off the whole horizon keeps the curve of the swing out of it.
+    """
+    ahead = np.asarray(rec["xi"], dtype=float).copy()
+    ahead[ekfm.IX_ALPHA_X] += ahead[ekfm.IX_ALPHA_DOT_X]*step
+    ahead[ekfm.IX_ALPHA_Y] += ahead[ekfm.IX_ALPHA_DOT_Y]*step
+    tip, _, _ = filt.estimate_to_px_coords(ahead, rec["P"], rec["T_IB"], K, D)
+    return center + (tip - center)*(horizon/step)
+
+
+def overlay_video(session, records, save=None, n_sigma=2, horizon=0.5):
+    """Redraw the recording with the EKF payload estimate on each frame.
+
+    A green dot marks where the filter believes the payload is and the shaded
+    ellipse around it is its `n_sigma` position uncertainty, both projected
+    into the camera by `EKF.estimate_to_px_coords`. An arrow runs to where the
+    swing puts the payload `horizon` seconds later, so it grows with speed, and
+    the swing velocity is written beside it. Frames the filter never reached
+    are copied through untouched.
+    """
+    src = find_recording(session)
+    if src is None:
+        raise SystemExit(f"session {session.id} has no recording next to "
+                         f"{session.pose.name}")
+
+    cap = cv2.VideoCapture(str(src))
+    if not cap.isOpened():
+        raise SystemExit(f"cannot open {src}")
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    out = Path(save) if save else src.with_name(session.id + OVERLAY_SUFFIX)
+    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"MJPG"),
+                             fps, (w, h))
+
+    K, D = _intrinsics()
+    filt = make_ekf(0, 0, 0, 0, 0, 0, L=session.L_dyn)
+    drawn = {}
+    for r in records:
+        center, axes, angle = filt.estimate_to_px_coords(
+            r["xi"], r["P"], r["T_IB"], K, D, n_sigma)
+        # a payload swung out of the camera's half-space projects nowhere
+        tip = _heading_tip(filt, r, K, D, center, horizon)
+        if (np.isfinite(center).all() and np.isfinite(axes).all()
+                and np.isfinite(tip).all()):
+            drawn[r["frame"]] = (center, axes, angle, tip,
+                                 filt.estimate_to_swing_velocity(r["xi"]))
+
+    i = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        hit = drawn.get(i)
+        if hit is not None:
+            center, axes, angle, tip, (v_x, v_y) = hit
+            c = tuple(np.round(center).astype(int))
+            ax = tuple(np.maximum(np.round(axes).astype(int), 1))
+            shade = frame.copy()
+            cv2.ellipse(shade, c, ax, angle, 0, 360, BGR_EST, -1)
+            cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
+            cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
+
+            # a barely-moving payload has no direction worth drawing
+            end = tuple(np.round(tip).astype(int))
+            if np.hypot(*(np.asarray(end) - c)) > 8:
+                cv2.arrowedLine(frame, c, end, (0, 0, 0), 6, cv2.LINE_AA,
+                                tipLength=0.25)
+                cv2.arrowedLine(frame, c, end, BGR_EST, 3, cv2.LINE_AA,
+                                tipLength=0.25)
+            # the dot stays smaller than the band it sits in; at this range a
+            # 2-sigma ellipse is only about ten pixels across
+            cv2.circle(frame, c, 4, BGR_EST, -1)
+            cv2.circle(frame, c, 4, (255, 255, 255), 1)
+            _label(frame, c, (f"vE {v_x:+.2f} m/s", f"vN {v_y:+.2f} m/s"))
+        writer.write(frame)
+        i += 1
+
+    cap.release()
+    writer.release()
+    print(f"wrote {out}  ({len(drawn)} of {i} frames carry an estimate)")
+    return out
 
 
 # --------------------------------------------------------------------------

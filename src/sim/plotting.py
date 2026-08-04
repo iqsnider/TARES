@@ -23,6 +23,7 @@ COLORS = ['#0077BB', '#EE7733', '#CC3311']
 C_REF = '#9AA0A6'      # reference / set-point traces
 C_DRONE = '#0077BB'    # drone path
 C_PAYLOAD = '#EE7733'  # payload path
+C_EKF = '#009988'      # EKF-estimated payload path
 C_HOVER = '#CC3311'    # hover-thrust marker
 GRID_GREY = '#C9C4B4'
 PARCHMENT = '#f4f1ea'  # figure / axes background
@@ -255,21 +256,30 @@ def _body_name(ref_target):
 # ----------------------------------------------------------------------------
 # 3-D trajectory
 # ----------------------------------------------------------------------------
+def _payload_position(drone, alpha_x, alpha_y):
+    """Payload position hanging off `drone` at the given swing angles."""
+    sax, say = np.sin(alpha_x), np.sin(alpha_y)
+    cax, cay = np.cos(alpha_x), np.cos(alpha_y)
+    return drone + TETHER_LEN * np.column_stack([sax * cay, say, -cax * cay])
+
+
 def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
                        title='Trajectory',
                        save_dir=None, fname='trajectory_3d',
-                       ref_target='payload', slider=True):
+                       ref_target='payload', slider=True, xi_log=None):
     """3-D drone/payload paths against the reference `P_ref`.
 
     `ref_target` says which body P_ref was drawn for ('payload' or 'drone').
+    With `xi_log` (the 5 x N EKF state history), the payload position the
+    filter believes in is drawn alongside the true one -- both hang off the
+    same drone path, so the gap between them is the swing-angle error.
     With `slider`, the on-screen figure gets a time slider that plays the run
     back; the figure is saved first, so the PNG always holds the whole run.
     """
     drone = X[:, 0:3]
-    sax, say = np.sin(X[:, 12]), np.sin(X[:, 13])
-    cax, cay = np.cos(X[:, 12]), np.cos(X[:, 13])
-    payload = drone + TETHER_LEN * \
-        np.column_stack([sax * cay, say, -cax * cay])
+    payload = _payload_position(drone, X[:, 12], X[:, 13])
+    payload_hat = (None if xi_log is None
+                   else _payload_position(drone, xi_log[0], xi_log[1]))
 
     fig = plt.figure(figsize=(11, 9), constrained_layout=True)
     ax = fig.add_subplot(projection='3d')
@@ -281,7 +291,13 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
                       label=f'{_body_name(ref_target)} reference')
     drone_ln, = ax.plot(*drone.T, color=C_DRONE, linewidth=2.0, label='Drone')
     payload_ln, = ax.plot(*payload.T, color=C_PAYLOAD, linewidth=2.0,
-                          label='Payload')
+                          label='Payload (true)')
+
+    payload_hat_ln = None
+    if payload_hat is not None:
+        payload_hat_ln, = ax.plot(*payload_hat.T, color=C_EKF, linewidth=1.5,
+                                  linestyle=(0, (4, 3)),
+                                  label='Payload (EKF)')
 
     idx = np.linspace(0, len(ts) - 1, n_tethers).astype(int)
     tethers = []
@@ -298,15 +314,30 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
                            color='#3C4043', linewidth=1.8, zorder=4,
                            label='Tether (at $t$)')
 
-    ax.scatter(*drone[0], color='#2CA02C', edgecolors='white', linewidths=0.8,
-               marker='^', s=90, depthshade=False, label='Start', zorder=5)
-    head, = ax.plot(*drone[-1:].T, marker='s', markersize=8,
+    # Start/End go on the body the reference was drawn for; the other end of
+    # the system gets the same pair, smaller, so both ends of the tether are
+    # capped without stealing the eye from the path being tracked.
+    tracked = drone if ref_target == 'drone' else payload
+    other = payload if ref_target == 'drone' else drone
+
+    ax.scatter(*tracked[0], color='#2CA02C', edgecolors='white',
+               linewidths=0.8, marker='^', s=90, depthshade=False,
+               label='Start', zorder=5)
+    head, = ax.plot(*tracked[-1:].T, marker='s', markersize=8,
                     color='#222222', markeredgecolor='white',
                     markeredgewidth=0.8, linestyle='none', zorder=5,
                     label='End')
 
+    ax.scatter(*other[0], color='#2CA02C', edgecolors='white', linewidths=0.6,
+               marker='^', s=40, depthshade=False, alpha=0.7, zorder=5)
+    other_head, = ax.plot(*other[-1:].T, marker='s', markersize=5,
+                          color='#222222', markeredgecolor='white',
+                          markeredgewidth=0.6, linestyle='none', alpha=0.7,
+                          zorder=5)
+
     # equal-aspect cube
-    all_pts = np.vstack([drone, payload, P_ref])
+    all_pts = np.vstack([drone, payload, P_ref]
+                        + ([] if payload_hat is None else [payload_hat]))
     center = (all_pts.min(axis=0) + all_pts.max(axis=0)) / 2
     half = max((all_pts.max(axis=0) - all_pts.min(axis=0)).max() / 2 + 1.5, 5)
     ax.set_xlim(center[0] - half, center[0] + half)
@@ -328,7 +359,7 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
     ax.set_xlabel('$x$ [m]', labelpad=10)
     ax.set_ylabel('$y$ [m]', labelpad=10)
     ax.set_zlabel('$z$ [m]', labelpad=10)
-    ax.legend(fontsize=11, loc='upper left', framealpha=0.92)
+    ax.legend(fontsize=13.5, loc='upper left', framealpha=0.92)
 
     if save_dir:
         _save(fig, fname, save_dir)
@@ -338,7 +369,10 @@ def plot_trajectory_3d(ts, X, P_ref, n_tethers=25,
         s.line(ref_ln, P_ref)
         s.line(drone_ln, drone)
         s.line(payload_ln, payload)
-        s.marker(head, drone)
+        if payload_hat_ln is not None:
+            s.line(payload_hat_ln, payload_hat)
+        s.marker(head, tracked)
+        s.marker(other_head, other)
         s.span(live_tether, drone, payload)
         s.group(tethers, ts[idx])
     return fig
@@ -432,6 +466,78 @@ def _assemble(panels, nrows, ncols, t, Xe, U, suptitle, figsize, body):
     return fig
 
 
+# ----------------------------------------------------------------------------
+# EKF estimate against truth
+# ----------------------------------------------------------------------------
+def _p_estimate(ax, t, truth, est, labels, ylabel, title, sigma=None):
+    """Overlay an estimate (dashed) on the truth (solid), one colour per state.
+
+    With `sigma` (the filter's 1-sigma for each state) the estimate carries a
+    2-sigma band; it is left off the legend, which the dashed line already
+    accounts for.
+    """
+    for i, lbl in enumerate(labels):
+        if sigma is not None:
+            ax.fill_between(t, est[i] - 2*sigma[i], est[i] + 2*sigma[i],
+                            color=COLORS[i], alpha=0.2, linewidth=0.6,
+                            edgecolor=COLORS[i], label=rf'{lbl} $\pm2\sigma$')
+        ax.plot(t, truth[i], color=COLORS[i], label=f'{lbl} true')
+        ax.plot(t, est[i], color=COLORS[i], linewidth=1.3,
+                linestyle=(0, (4, 3)), label=f'{lbl} EKF')
+    _fmt(ax, ylabel, title)
+
+
+def _p_estimate_error(ax, t, truth, est, labels, ylabel, title):
+    """Estimate minus truth."""
+    for i, lbl in enumerate(labels):
+        ax.plot(t, est[i] - truth[i], color=COLORS[i], label=lbl)
+    _fmt(ax, ylabel, title)
+
+
+def plot_ekf_states(ts, X, xi_log, var_log=None,
+                    title='EKF Payload State Estimate',
+                    save_dir=None, fname='ekf_states'):
+    """Compare the EKF swing-state estimate with the truth from the plant.
+
+    `xi_log` is the filter state history (5 x N):
+    [alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, psi_p]. The plant carries no
+    payload yaw, so only the four swing states have a truth to plot against.
+    `var_log` is the matching diagonal of the covariance, which draws the
+    filter's 2-sigma band around each estimate and around zero error.
+    """
+    ang_true = np.rad2deg(X[:, 12:14].T)
+    ang_est = np.rad2deg(xi_log[0:2])
+    rate_true = np.rad2deg(X[:, 14:16].T)
+    rate_est = np.rad2deg(xi_log[2:4])
+
+    ang_sig = rate_sig = None
+    if var_log is not None:
+        sigma = np.rad2deg(np.sqrt(var_log))
+        ang_sig, rate_sig = sigma[0:2], sigma[2:4]
+
+    ang_lbl = [r'$\alpha_x$', r'$\alpha_y$']
+    rate_lbl = [r'$\dot\alpha_x$', r'$\dot\alpha_y$']
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9), constrained_layout=True)
+    _p_estimate(axes[0, 0], ts, ang_true, ang_est, ang_lbl,
+                'Pendulum angle [deg]', 'Payload Angle', ang_sig)
+    _p_estimate(axes[0, 1], ts, rate_true, rate_est, rate_lbl,
+                'Pendulum rate [deg/s]', 'Payload Angle Rate', rate_sig)
+    _p_estimate_error(axes[1, 0], ts, ang_true, ang_est, ang_lbl,
+                      'Angle error [deg]', 'Payload Angle Estimation Error')
+    _p_estimate_error(axes[1, 1], ts, rate_true, rate_est, rate_lbl,
+                      'Rate error [deg/s]', 'Payload Rate Estimation Error')
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel('Time [s]')
+    if title:
+        fig.suptitle(title, fontsize=18, fontweight='bold')
+
+    if save_dir:
+        _save(fig, fname, save_dir)
+    return fig
+
+
 def state_control_grid(t, X_err, U_pert, title='Nonlinear Model',
                        save_dir=None, fname='state_control',
                        ref_target='payload'):
@@ -477,16 +583,20 @@ def state_control_panels(t, X_err, U_pert, title='Nonlinear Model',
 def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
              traj_title='Trajectory',
              save_dir=FIG_DIR, layout='panels', n_tethers=25, fnames=None,
-             verbose=False, ref_target='payload'):
+             verbose=False, ref_target='payload', xi_log=None, var_log=None):
     """Generate every figure and write it to ``save_dir`` (default ``figs/``).
 
     layout : 'panels' (two 2x2, default), 'grid' (one 4x2), or 'both'.
     ref_target : body the reference was drawn for, 'payload' or 'drone'.
+    xi_log : EKF state history (5 x N); adds the estimated payload path to the
+        trajectory and the estimate-vs-truth figure.
+    var_log : covariance diagonal (5 x N); adds 2-sigma bands to that figure.
     Returns a dict mapping a short key to each Figure.
     """
     figs = {'trajectory': plot_trajectory_3d(
         ts, X, P_ref, n_tethers=n_tethers, title=traj_title,
-        save_dir=save_dir, fname='trajectory_3d', ref_target=ref_target)}
+        save_dir=save_dir, fname='trajectory_3d', ref_target=ref_target,
+        xi_log=xi_log)}
 
     if verbose:
         title += (
@@ -513,6 +623,9 @@ def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
         figs['state_control'] = state_control_grid(
             t, X_err, U_pert, title=title, save_dir=save_dir,
             ref_target=ref_target)
+    if xi_log is not None:
+        figs['ekf_states'] = plot_ekf_states(ts, X, xi_log, var_log,
+                                             save_dir=save_dir)
     return figs
 
 
@@ -523,9 +636,10 @@ def plot_run(run, save_dir=None, layout='panels', show=True,
              ref_target=None):
     """Draw every figure for one run, writing them only if `save_dir` is set.
 
-    `run` holds what simulate() produced -- ts, X, P_ref, err_log, u_log --
-    plus the architecture name and the body the reference was drawn for.
-    `ref_target` overrides the latter. Returns the dict of figures.
+    `run` holds what simulate() produced -- ts, X, P_ref, err_log, u_log, and
+    optionally xi_log -- plus the architecture name and the body the reference
+    was drawn for. `ref_target` overrides the latter. Returns the dict of
+    figures.
     """
     ref_target = ref_target or run['ref_target']
     title = f"Nonlinear Model - {run['arch']}" if run['arch'] \
@@ -534,9 +648,11 @@ def plot_run(run, save_dir=None, layout='panels', show=True,
 
     figs = save_all(ts=run['ts'], X=run['X'], P_ref=run['P_ref'],
                     t=run['ts'], X_err=run['err_log'], U_pert=run['u_log'],
-                    title=title, traj_title='Drone and Payload Trajectory',
+                    title=title,
+                    traj_title='Simulation: Drone and Payload Trajectory',
                     save_dir=save_dir, layout=layout, verbose=True,
-                    ref_target=ref_target)
+                    ref_target=ref_target, xi_log=run.get('xi_log'),
+                    var_log=run.get('var_log'))
     if save_dir:
         print(f'figures written to {save_dir}/')
 

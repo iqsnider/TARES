@@ -36,14 +36,14 @@ def _out(save, name):
 # ----------------------------------------------------------------------------
 # what each kind draws
 # ----------------------------------------------------------------------------
-def kind_drone(s, save):
+def kind_drone(s, save, cam=False):
     """Everything the flight log alone can show."""
     import drone_plot
     drone_plot.plot_suite(s.fl, save=save and Path(save).expanduser(),
                           stem=s.id)
 
 
-def kind_traj(s, save):
+def kind_traj(s, save, cam=False):
     """3-D trajectory of the drone with the camera-measured payload."""
     import payload_plot
     from sim.estimation.calculate_payload_position import (
@@ -56,14 +56,21 @@ def kind_traj(s, save):
         s.fl, pdf, save=_out(save, f"{s.id}_trajectory_3d.png"))
 
 
-def kind_ekf(s, save):
-    """Run the payload EKF and show the 3-D and time-series comparisons."""
+def kind_ekf(s, save, cam=False):
+    """Run the payload EKF and show the 3-D and time-series comparisons.
+
+    With `cam`, the recording is also written back out as an .avi carrying the
+    estimated payload position.
+    """
     import ekf_plots
     r = ekf_plots.analyse(s)
     ekf_plots.plot_3d(s.fl, r["pdf"], r["est_t"], r["est"],
                       save=_out(save, f"{s.id}_ekf_3d.png"))
     ekf_plots.plot_timeseries(r["R"], r["meas_df"], r["offset"],
                               save=_out(save, f"{s.id}_ekf_timeseries.png"))
+    if cam:
+        ekf_plots.overlay_video(s, r["records"],
+                                save=_out(save, f"{s.id}_ekf_overlay.avi"))
 
 
 KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf}
@@ -81,6 +88,9 @@ def main(argv=None):
                     help="what to draw: " + ", ".join(sorted(KINDS)))
     ap.add_argument("--save", metavar="DIR", default=None,
                     help="write PNGs here instead of only showing them")
+    ap.add_argument("--cam", action="store_true",
+                    help="ekf only: also write the recording back out as an "
+                         ".avi with the estimated payload drawn on it")
     ap.add_argument("--root", default=None, help="override the data root")
     args = ap.parse_args(argv)
 
@@ -108,6 +118,8 @@ def main(argv=None):
     if args.kind not in KINDS:
         ap.error(f"unknown kind {args.kind!r}; choose from "
                  + ", ".join(sorted(KINDS)))
+    if args.cam and args.kind != "ekf":
+        ap.error("--cam only applies to `ekf`")
 
     try:
         s = catalog.resolve(args.selector)
@@ -120,7 +132,7 @@ def main(argv=None):
     if s.has_camera:
         print(f"   cam  {s.pose}   offset {s.pose_offset:+.2f} s")
 
-    KINDS[args.kind](s, args.save)
+    KINDS[args.kind](s, args.save, cam=args.cam)
 
     if args.save:
         print(f"figures written to {args.save}/")

@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import cv2
 
 import Prm.config as config
 import sim.estimation.pre_process as pp
@@ -56,7 +57,7 @@ class EKF:
                  q_xy=(0.02)**2, # process noise on alpha_ddot_xy
                  q_yaw=(0.3)**2, # process noise on psi_p
                  sigma_xy=math.radians(0.5), # bearing noise [rad]
-                 sigma_yaw=math.radians(3), # payload yaw noise [rad]
+                 sigma_yaw=math.radians(30), # payload yaw noise [rad]
                  sigma_alpha_0=math.radians(2), # initial swing angle 1-sigma [rad]
                  sigma_rate_0=math.radians(30), # initial swing rate 1-sigma [rad/s]
                  sigma_psi_p_0=math.radians(15)): # initial payload yaw 1-sigma [rad]
@@ -67,6 +68,10 @@ class EKF:
         self.T_BC = config.CAM_R
         self.T_CB = self.T_BC.T
         self.g = config.GRAVITY
+        self.t_BC_B = np.array([config.CAM_OFFSET_X,
+                           config.CAM_OFFSET_Y,
+                           config.CAM_OFFSET_Z])
+        self.l_B = config.TETHER_PIVOT_OFFSET
 
         # set noise parameters
         self.q_xy = q_xy
@@ -211,6 +216,57 @@ class EKF:
         self.nis = float(y @ np.linalg.solve(S, y))
 
         return xi, P
+
+
+    def estimate_to_px_coords(self, xi, P, T_IB, K, D, n_sigma=1):
+        """
+        Takes a payload state estimate and calculates the pixel coordinates sized to the camera frame.
+        For viewing the estimate overlaid on the recording.
+        """
+        L = config.TETHER_LEN
+        A = self.T_CB @ T_IB.T
+
+        q_I = np.array([xi[IX_ALPHA_X], xi[IX_ALPHA_Y], -1])
+
+        # undo pivot shift
+        p_C = L*(A @ q_I) - self.T_CB @ (self.t_BC_B - self.l_B)
+
+        uv, _ = cv2.projectPoints(p_C.reshape(1, 1, 3), np.zeros(3), np.zeros(3), K, D)
+        center = uv.ravel()
+
+        X, Y, Z = p_C
+        J_proj = np.array([[K[0, 0]/Z, 0, -K[0, 0]*X/Z**2],
+                           [0, K[1, 1]/Z, -K[1, 1]*Y/Z**2]])
+        J = J_proj @ (L*A[:, 0:2])
+        P_px = J @ P[0:2, 0:2] @ J.T
+
+        evals, evecs = np.linalg.eigh(P_px)
+        axes = n_sigma*np.sqrt(evals[::-1])      # major first
+        angle = math.degrees(math.atan2(evecs[1, -1], evecs[0, -1]))
+
+        return center, axes, angle
+
+
+    def estimate_to_swing_velocity(self, xi):
+        """
+        Payload velocity along inertial east and north, relative to the drone.
+
+        The tether is taut, so the payload rides a sphere of radius L about the
+        pivot and its velocity is L*d(q_I)/dt. The swing angles are inertial,
+        so these come out in ENU and do not turn with the drone's heading, but
+        the derivative is taken about the pivot: only the swing shows up here,
+        and whatever the drone itself is doing has to be added on top.
+        """
+        L = config.TETHER_LEN
+        alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
+
+        sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+        say, cay = math.sin(alpha_y), math.cos(alpha_y)
+
+        v_x = L*(cax*cay*alpha_dot_x - sax*say*alpha_dot_y)
+        v_y = L*cay*alpha_dot_y
+
+        return v_x, v_y
 
 
     def __call__(self, frame, a_I, dt, phi, theta, psi):
