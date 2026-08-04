@@ -249,22 +249,18 @@ class EKF:
 
     def estimate_to_swing_velocity(self, xi):
         """
-        Payload velocity along inertial east and north, relative to the drone.
-
-        The tether is taut, so the payload rides a sphere of radius L about the
-        pivot and its velocity is L*d(q_I)/dt. The swing angles are inertial,
-        so these come out in ENU and do not turn with the drone's heading, but
-        the derivative is taken about the pivot: only the swing shows up here,
-        and whatever the drone itself is doing has to be added on top.
+        Payload velocity along inertial east and north
         """
         L = config.TETHER_LEN
         alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
 
-        sax, cax = math.sin(alpha_x), math.cos(alpha_x)
-        say, cay = math.sin(alpha_y), math.cos(alpha_y)
+        # sax, cax = math.sin(alpha_x), math.cos(alpha_x)
+        # say, cay = math.sin(alpha_y), math.cos(alpha_y)
 
-        v_x = L*(cax*cay*alpha_dot_x - sax*say*alpha_dot_y)
-        v_y = L*cay*alpha_dot_y
+        # v_x = L*(cax*cay*alpha_dot_x - sax*say*alpha_dot_y)
+        # v_y = L*cay*alpha_dot_y
+        v_x = L*alpha_dot_x
+        v_y = L*alpha_dot_y
 
         return v_x, v_y
 
