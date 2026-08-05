@@ -143,8 +143,6 @@ class EKF:
         Q = np.diag([0, 0, self.q_xy, self.q_xy, self.q_yaw])*dt
         P_pred = Phi @ P @ Phi.T + Q
 
-        P_pred = 0.5*(P_pred + P_pred.T)
-
         return xi_pred, P_pred
 
     def measurement_prediction(self, xi, T_BI):
@@ -211,9 +209,6 @@ class EKF:
         xi = xi + K @ y
         xi[IX_PSI_P] = wrap_pi(xi[IX_PSI_P])
         P = (np.eye(STATE_DIM) - K @ H) @ P
-        P = 0.5*(P + P.T)
-
-        self.nis = float(y @ np.linalg.solve(S, y))
 
         return xi, P
 

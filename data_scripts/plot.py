@@ -66,7 +66,7 @@ def kind_ekf(s, save, cam=False):
     r = ekf_plots.analyse(s)
     ekf_plots.plot_3d(s.fl, r["pdf"], r["est_t"], r["est"],
                       save=_out(save, f"{s.id}_ekf_3d.png"))
-    ekf_plots.plot_timeseries(r["R"], r["meas_df"], r["offset"],
+    ekf_plots.plot_timeseries(r["R"], r["meas_df"],
                               save=_out(save, f"{s.id}_ekf_timeseries.png"))
     if cam:
         ekf_plots.overlay_video(s, r["records"],

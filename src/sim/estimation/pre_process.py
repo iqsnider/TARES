@@ -109,11 +109,7 @@ def measurement(frame, T_IB):
 
 def swing_angles(frame, T_IB):
     """
-    One camera frame -> (alpha_x, alpha_y, psi_P), or None with no detection.
-
-    The same measurement in the states the filter carries rather than in the
-    camera frame: what one frame on its own says the payload is doing. Used to
-    seed the filter, and to plot the unfiltered measurement against it
+    One camera frame (alpha_x, alpha_y, psi_P), or None with no detection
     """
     detection = get_payload_center_in_camera_frame(frame)
     if detection is None:
@@ -128,8 +124,7 @@ def swing_angles(frame, T_IB):
 
 def marker_bearings(frame):
     """
-    The individual markers behind the board center, for plots that show which
-    ones PnP had to work with
+    The individual markers behind the board center
     """
     out = {}
     for marker in frame.dropna(subset=["marker_id"]).itertuples():

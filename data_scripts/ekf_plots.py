@@ -7,11 +7,10 @@ Run the payload EKF on a recorded flight and produce:
   3. with --cam, the camera recording written back out as an .avi with the
      estimated payload position drawn on every frame
 
-The pose CSV has no wall clock, so the offset between the two logs is
-estimated by minimising NIS (see run_on_log.py) rather than guessed.
+The pose CSV has no wall clock, so the offset between the two logs comes off
+the session (sessions.toml).
 """
 import json
-import math
 from pathlib import Path
 
 import cv2
@@ -25,71 +24,15 @@ import sim.estimation.pre_process as pp
 from sim.plotting import (TimeSlider, configure_plot_style,
                           C_REF, C_DRONE, C_PAYLOAD)
 import catalog
-from run_on_log import build_inputs, group_frames, make_ekf
+from run_on_log import build_inputs, group_frames, make_ekf, run_full
 
 configure_plot_style()   # shared serif / Computer Modern theme
 
-# The simulation figure draws its EKF payload track in teal; on real data it
-# stays green, so the two are not mistaken for each other.
 C_EST = "#009E73"
-
-# The intrinsics the poses were solved with, so the overlay lands where the
-# tracker thought the marker was.
 CALIB_FILE = (Path(__file__).resolve().parents[1] /
               "src/payload_tracking/camera_calibration/calibration.json")
 
-# BGR. C_EST itself is too dark to read against sunlit ground, so the video
-# uses a bright lime of the same family and leans on a black outline.
 BGR_EST = (60, 255, 80)
-
-
-# --------------------------------------------------------------------------
-# filter run
-# --------------------------------------------------------------------------
-def run_full(frames, inp, offset, L=None):
-    """Same recursion as run_on_log.run, keeping every state the plots want."""
-    t_fl = inp["t"]
-    filt = None
-    t_prev = None
-    out = []
-    for t_cam, g, det in frames:
-        t = t_cam - offset
-        if t < t_fl[0] or t > t_fl[-1]:
-            continue
-        phi = np.interp(t, t_fl, inp["phi"])
-        theta = np.interp(t, t_fl, inp["theta"])
-        psi = np.interp(t, t_fl, inp["psi"])
-        a_I = np.array([np.interp(t, t_fl, inp["a_I"][:, k]) for k in range(3)])
-
-        if filt is None:
-            seed = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi))
-            if seed is None:
-                continue
-            filt = make_ekf(phi, theta, psi, *seed, L=L)
-            t_prev = t_cam
-            continue
-
-        dt = min(max(t_cam - t_prev, 1e-3), 0.5)
-        t_prev = t_cam
-        filt.nis = None
-        xi, P = filt(g, a_I, dt, phi, theta, psi)
-
-        out.append(dict(t_cam=t_cam, t_flight=t, n=len(det), nis=filt.nis,
-                        frame=int(g.frame.iloc[0]),
-                        xi=xi.copy(), P=P.copy(), T_IB=filt.T_IB.copy(),
-                        alpha_x=xi[ekfm.IX_ALPHA_X],
-                        alpha_y=xi[ekfm.IX_ALPHA_Y],
-                        alpha_dot_x=xi[ekfm.IX_ALPHA_DOT_X],
-                        alpha_dot_y=xi[ekfm.IX_ALPHA_DOT_Y],
-                        psi_p=xi[ekfm.IX_PSI_P],
-                        sigma_alpha_x=math.sqrt(P[ekfm.IX_ALPHA_X,
-                                                 ekfm.IX_ALPHA_X]),
-                        sigma_alpha_y=math.sqrt(P[ekfm.IX_ALPHA_Y,
-                                                 ekfm.IX_ALPHA_Y]),
-                        sigma_psi_p=math.sqrt(P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]),
-                        q_I=filt.q_I(xi[ekfm.IX_ALPHA_X],
-                                     xi[ekfm.IX_ALPHA_Y])))
-    return out
 
 
 def direct_measurement(frames, inp, offset):
@@ -146,7 +89,7 @@ def analyse(session, verbose=True):
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
-    records = run_full(frames, inp, offset, L=session.L_dyn)
+    records = run_full(frames, inp, offset)
     meas_df = direct_measurement(frames, inp, offset)
     if verbose:
         print(f"{len(records)} filter steps, "
@@ -163,7 +106,7 @@ def analyse(session, verbose=True):
 def summarise(records, meas_df):
     """Print the numbers worth checking after every run."""
     R = pd.DataFrame([{k: v for k, v in r.items()
-                       if k in ("t_cam", "n", "nis",
+                       if k in ("t_cam", "n",
                                 "alpha_x", "alpha_y", "psi_p",
                                 "sigma_alpha_x", "sigma_alpha_y",
                                 "sigma_psi_p")}
@@ -171,14 +114,11 @@ def summarise(records, meas_df):
     sel = R.n > 0
     mi = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_x)
     mj = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_y)
-    warm = R[(R.n > 0) & (R.t_cam > R.t_cam.min() + 3)]
     gaps = np.diff(R.t_cam[sel].to_numpy())
     print(f"  alpha_x RMS vs direct measurement : "
           f"{np.rad2deg(np.sqrt(np.mean((R.alpha_x[sel]-mi[sel])**2))):.3f} deg")
     print(f"  alpha_y RMS vs direct measurement : "
           f"{np.rad2deg(np.sqrt(np.mean((R.alpha_y[sel]-mj[sel])**2))):.3f} deg")
-    print(f"  mean normalised NIS               : "
-          f"{np.mean(warm.nis/ekfm.MEAS_DIM):.3f}  (target 1.0)")
     print(f"  mean 1-sigma alpha                : "
           f"{np.rad2deg(R.sigma_alpha_x[sel].mean()):.3f}, "
           f"{np.rad2deg(R.sigma_alpha_y[sel].mean()):.3f} deg")
@@ -292,8 +232,8 @@ def _break_wraps(deg, jump=180.0):
     return deg
 
 
-def plot_timeseries(R, meas_df, offset, save=None):
-    """EKF vs per-frame measurement, with occlusion shading and 2-sigma band."""
+def plot_timeseries(R, meas_df, save=None):
+    """EKF vs per-frame measurement, with the 2-sigma band."""
     fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
     # psi_p is a measured state now, so it gets a panel like the swing angles
     for k, (nm, lbl, sg) in enumerate(
@@ -301,9 +241,6 @@ def plot_timeseries(R, meas_df, offset, save=None):
              ("alpha_y", r"$\alpha_y$", "sigma_alpha_y"),
              ("psi_p", r"$\psi_P$", "sigma_psi_p")]):
         a = axs[k]
-        gaps = R.t_cam[R.n == 0].to_numpy()
-        for t0 in gaps:
-            a.axvspan(t0 - 0.015, t0 + 0.015, color="0.88", lw=0)
         y = _break_wraps(np.rad2deg(R[nm]))
         sig = np.rad2deg(R[sg])
         a.plot(meas_df.t_cam, np.rad2deg(meas_df[nm]), ".", ms=4,
@@ -322,8 +259,7 @@ def plot_timeseries(R, meas_df, offset, save=None):
     axs[3].set_yticks([0, 1, 2, 3])
     axs[3].set_xlabel("camera time [s]")
     axs[3].grid(alpha=0.3)
-    axs[0].set_title("Payload swing: EKF vs direct measurement "
-                     f"(grey = no marker detected, offset {offset:+.2f} s)")
+    axs[0].set_title("Payload swing: EKF vs direct measurement")
     fig.tight_layout()
     if save:
         fig.savefig(save, dpi=115)
@@ -387,31 +323,14 @@ def _label(frame, c, lines, gap=14, scale=1.15, thick=3):
         cv2.putText(frame, text, at, font, scale, BGR_EST, thick, cv2.LINE_AA)
 
 
-def _heading_tip(filt, rec, K, D, center, horizon, step=0.05):
-    """Tip of an arrow along the payload's current direction of travel.
-
-    The swing is nudged one short `step` ahead and projected through the same
-    call as the estimate itself, which gives the direction in the picture; that
-    is then stretched to the distance `horizon` seconds of it would cover, so
-    the arrow grows with speed. Reading the direction off a short step rather
-    than off the whole horizon keeps the curve of the swing out of it.
-    """
-    ahead = np.asarray(rec["xi"], dtype=float).copy()
-    ahead[ekfm.IX_ALPHA_X] += ahead[ekfm.IX_ALPHA_DOT_X]*step
-    ahead[ekfm.IX_ALPHA_Y] += ahead[ekfm.IX_ALPHA_DOT_Y]*step
-    tip, _, _ = filt.estimate_to_px_coords(ahead, rec["P"], rec["T_IB"], K, D)
-    return center + (tip - center)*(horizon/step)
-
-
-def overlay_video(session, records, save=None, n_sigma=2, horizon=0.5):
+def overlay_video(session, records, save=None, n_sigma=2):
     """Redraw the recording with the EKF payload estimate on each frame.
 
     A green dot marks where the filter believes the payload is and the shaded
     ellipse around it is its `n_sigma` position uncertainty, both projected
-    into the camera by `EKF.estimate_to_px_coords`. An arrow runs to where the
-    swing puts the payload `horizon` seconds later, so it grows with speed, and
-    the swing velocity is written beside it. Frames the filter never reached
-    are copied through untouched.
+    into the camera by `EKF.estimate_to_px_coords`. The swing velocity is
+    written beside it. Frames the filter never reached are copied through
+    untouched.
     """
     src = find_recording(session)
     if src is None:
@@ -430,16 +349,14 @@ def overlay_video(session, records, save=None, n_sigma=2, horizon=0.5):
                              fps, (w, h))
 
     K, D = _intrinsics()
-    filt = make_ekf(0, 0, 0, 0, 0, 0, L=session.L_dyn)
+    filt = make_ekf(0, 0, 0, 0, 0, 0)
     drawn = {}
     for r in records:
         center, axes, angle = filt.estimate_to_px_coords(
             r["xi"], r["P"], r["T_IB"], K, D, n_sigma)
         # a payload swung out of the camera's half-space projects nowhere
-        tip = _heading_tip(filt, r, K, D, center, horizon)
-        if (np.isfinite(center).all() and np.isfinite(axes).all()
-                and np.isfinite(tip).all()):
-            drawn[r["frame"]] = (center, axes, angle, tip,
+        if np.isfinite(center).all() and np.isfinite(axes).all():
+            drawn[r["frame"]] = (center, axes, angle,
                                  filt.estimate_to_swing_velocity(r["xi"]))
 
     i = 0
@@ -449,7 +366,7 @@ def overlay_video(session, records, save=None, n_sigma=2, horizon=0.5):
             break
         hit = drawn.get(i)
         if hit is not None:
-            center, axes, angle, tip, (v_x, v_y) = hit
+            center, axes, angle, (v_x, v_y) = hit
             c = tuple(np.round(center).astype(int))
             ax = tuple(np.maximum(np.round(axes).astype(int), 1))
             shade = frame.copy()
@@ -457,13 +374,6 @@ def overlay_video(session, records, save=None, n_sigma=2, horizon=0.5):
             cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
             cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
 
-            # a barely-moving payload has no direction worth drawing
-            end = tuple(np.round(tip).astype(int))
-            if np.hypot(*(np.asarray(end) - c)) > 8:
-                cv2.arrowedLine(frame, c, end, (0, 0, 0), 6, cv2.LINE_AA,
-                                tipLength=0.25)
-                cv2.arrowedLine(frame, c, end, BGR_EST, 3, cv2.LINE_AA,
-                                tipLength=0.25)
             # the dot stays smaller than the band it sits in; at this range a
             # 2-sigma ellipse is only about ten pixels across
             cv2.circle(frame, c, 4, BGR_EST, -1)
@@ -501,7 +411,7 @@ if __name__ == "__main__":
 
     plot_3d(session.fl, r["pdf"], r["est_t"], r["est"],
             save=out and out / f"{session.id}_ekf_3d.png")
-    plot_timeseries(r["R"], r["meas_df"], r["offset"],
+    plot_timeseries(r["R"], r["meas_df"],
                     save=out and out / f"{session.id}_ekf_timeseries.png")
 
     plt.show()   # interactive, so the 3-D view can be panned
