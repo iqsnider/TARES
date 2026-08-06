@@ -34,7 +34,7 @@ class ControlComms:
     A library of functions for sending/managing control communications for a given mav connection.
     Makes sure the time and logger are continuosly operating from object intialization.
     """
-    def __init__(self, m, control_frequency=50, logger=None, rec=True):
+    def __init__(self, m, control_frequency=50, logger=None):
         # connection and frequency availability
         self.m = m
         self.hz = control_frequency
@@ -53,10 +53,6 @@ class ControlComms:
 
         # initialize control states
         self._initialize_control_logs()
-
-        # initialize camera recording
-        if rec:
-            pass
 
 
 

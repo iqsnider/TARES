@@ -116,7 +116,7 @@ if __name__ == '__main__':
 
     # start the payload camera on its own thread, scoped to the controlled flight.
     # (move this above comms.arm() if you'd rather confirm the camera is
-    #  recording before committing to a takeoff.)
+    # recording before committing to a takeoff.)
     recorder, cam_thread = start_camera(
         marker_size_m=marker_size_m,
         video_out=video_out,
@@ -137,5 +137,5 @@ if __name__ == '__main__':
         # stop the camera first so it flushes its video + pose CSV,
         # then close the flight logger
         recorder.stop()
-        cam_thread.join(timeout=5.0)
+        cam_thread.join(timeout=5)
         logger.close()

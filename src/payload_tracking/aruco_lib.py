@@ -5,12 +5,16 @@ import time
 import queue
 import signal
 import threading
+import subprocess
 import http.server
 import numpy as np
 
 import os
 
 NAN = float("nan")
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_CALIB = os.path.join(_HERE, "camera_calibration/calibration.json")
 
 
 class _FrameGrabber(threading.Thread):
@@ -120,16 +124,8 @@ class _AsyncWriter(threading.Thread):
 
 class _MJPEGPreview:
     """Serve the latest annotated frame as an MJPEG-over-HTTP stream.
-
-    The camera can be opened by only one process, so a second VideoCapture on
-    the same device would fail -- instead the recorder tees each annotated
-    frame here via update(). A background encoder thread downscales and
-    JPEG-encodes at a capped fps, so the recording loop only pays a cheap
-    reference store and the preview never competes for CPU or saturates the
-    link. View at http://<host>:<port>/ in a browser or VLC. To avoid exposing
-    a port on the router, forward it over the existing SSH session:
-        ssh -L <port>:localhost:<port> user@co-computer
-    then open http://localhost:<port>/ on the laptop.
+    ssh -L <port>:localhost:<port> user@co-computer
+    open http://localhost:<port>/ on the laptop.
     """
 
     def __init__(self, port=8080, host="0.0.0.0",
@@ -236,11 +232,17 @@ class _MJPEGPreview:
 
 class MarkerPoseRecorder:
     def __init__(self,
-                 calibration_path="~/TARES/src/payload_tracking/camera_calibration/calibration.json",
-                 marker_size_m=0.14,
+                 calibration_path=_DEFAULT_CALIB,
+                 marker_size_m=0.17,
                  video_out="recording.avi",
                  csv_out="poses.csv",
-                 fps=60,
+                 capture_fps=48,
+                 frame_stride=1,
+                 width=2304,
+                 height=1536,
+                 pixel_format="MJPG",
+                 exposure_abs=5,               # units of 100us; 5 = 0.5 ms
+                 gain=30,
                  aruco_dict=cv2.aruco.DICT_4X4_250,
                  marker_ids=None,
                  flight_logger=None,
@@ -259,9 +261,31 @@ class MarkerPoseRecorder:
         self.marker_ids = None if marker_ids is None else {int(i) for i in marker_ids}
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
-        self.fps = fps
         self.print_every = print_every            # 0 = silent per-frame
         self.write_queue_size = write_queue_size
+
+        # capture format. These must be a (pixel_format, size, rate) triple the
+        # driver actually lists -- check with:
+        #   v4l2-ctl -d /dev/video0 --list-formats-ext
+        # V4L2 snaps unsupported values silently rather than erroring, so never
+        # derive these from the calibration intrinsics.
+        #
+        # MJPG at 2304x1536 offers 48 fps and nothing else. Lower rates come
+        # from frame_stride, which keeps only every Nth frame -- so the usable
+        # set is 48, 24, 16, 12. There is no 30.
+        self.width = width
+        self.height = height
+        self.pixel_format = pixel_format
+        self.capture_fps = capture_fps
+        self.frame_stride = max(1, int(frame_stride))
+        self.fps = capture_fps / self.frame_stride    # effective recorded rate
+
+        # exposure is pinned manually: auto-exposure stretches integration time
+        # to ~31 ms, which smears the marker under airframe vibration. Short
+        # exposure + high gain trades blur for noise, and ArUco tolerates noise
+        # far better than blur.
+        self.exposure_abs = exposure_abs
+        self.gain = gain
 
         # live preview (MJPEG-over-HTTP); preview_port=None disables it
         self.preview_port = preview_port
@@ -276,10 +300,14 @@ class MarkerPoseRecorder:
         self.mtx = np.array(calib["mtx"], dtype=np.float64)
         self.dist = np.array(calib["dist"], dtype=np.float64)
 
-        # aruco detector
+        # aruco detector. Subpixel corner refinement is off by default and is
+        # worth roughly 5x on pose precision at long range. The perimeter floor
+        # is lowered so small (distant) markers aren't silently rejected.
         dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict)
-        self.detector = cv2.aruco.ArucoDetector(
-            dictionary, cv2.aruco.DetectorParameters())
+        params = cv2.aruco.DetectorParameters()
+        params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        params.minMarkerPerimeterRate = 0.01
+        self.detector = cv2.aruco.ArucoDetector(dictionary, params)
 
         # marker object points (centered square)
         s = marker_size_m / 2
@@ -287,10 +315,6 @@ class MarkerPoseRecorder:
                                     [s, s, 0],
                                     [s, -s, 0],
                                     [-s, -s, 0]], dtype=np.float32)
-
-        # calibration resolution
-        self.calib_w = int(round(2 * self.mtx[0, 2]))
-        self.calib_h = int(round(2 * self.mtx[1, 2]))
 
         # handles created when recording starts
         self.cap = None
@@ -330,12 +354,37 @@ class MarkerPoseRecorder:
             return kept_corners, np.array(kept_ids, dtype=np.int32).reshape(-1, 1), poses
         return (), None, poses
 
+    def _set_camera_controls(self, camera_index):
+        """Pin exposure and gain via v4l2-ctl.
+
+        OpenCV's property mapping on this device is unreliable (it accepts
+        out-of-range values silently), so talk to the driver directly. Must run
+        after the stream is live: setting the format triggers VIDIOC_S_FMT,
+        which resets controls on many UVC drivers. Two calls because
+        exposure_time_absolute stays inactive until auto_exposure is switched
+        to manual.
+        """
+        dev = f"/dev/video{camera_index}"
+        subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
+        subprocess.run(["v4l2-ctl", "-d", dev,
+                        "-c", f"exposure_time_absolute={self.exposure_abs}",
+                        "-c", f"gain={self.gain}"])
+        readback = subprocess.run(
+            ["v4l2-ctl", "-d", dev, "-C",
+             "auto_exposure,exposure_time_absolute,gain"],
+            capture_output=True, text=True)
+        print(readback.stdout.strip())
+
     def open(self, camera_index=0):
         """Open the camera and the output video/CSV files."""
         self.cap = cv2.VideoCapture(camera_index)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.calib_w)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.calib_h)
+        # FOURCC first, then size, then rate -- the driver resolves them in
+        # that order and a later call can invalidate an earlier one.
+        self.cap.set(cv2.CAP_PROP_FOURCC,
+                     cv2.VideoWriter_fourcc(*self.pixel_format))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.cap.set(cv2.CAP_PROP_FPS, self.capture_fps)
 
         # Warm-up: an MJPG V4L2 device often isn't streaming valid frames for
         # the first tens of ms after set(), so the first read can come back
@@ -358,10 +407,21 @@ class MarkerPoseRecorder:
             raise RuntimeError(
                 "camera did not produce a valid frame during warm-up "
                 "(check it isn't held by another process)")
+
+        # Report what the driver actually negotiated. V4L2 falls back silently
+        # rather than erroring, so this is the only confirmation the requested
+        # format/size/rate was honoured.
+        cc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
         h, w = frame.shape[:2]
-        print(f"requested {self.calib_w}x{self.calib_h}, got {w}x{h}")
-        assert abs(w - self.calib_w) < 0.1 * self.calib_w, \
-            "resolution mismatch, pose will be wrong"
+        print("negotiated: {} {}x{} @ {}".format(
+            "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)),
+            w, h, self.cap.get(cv2.CAP_PROP_FPS)))
+        if self.frame_stride > 1:
+            print(f"stride {self.frame_stride} -> recording at {self.fps:g} fps")
+        assert (w, h) == (self.width, self.height), \
+            f"requested {self.width}x{self.height}, got {w}x{h}; pose will be wrong"
+
+        self._set_camera_controls(camera_index)
 
         self.writer = cv2.VideoWriter(
             self.video_out, cv2.VideoWriter_fourcc(*"MJPG"),
@@ -390,10 +450,6 @@ class MarkerPoseRecorder:
 
     def process_frame(self, frame):
         """Detect markers, annotate the frame, write video + CSV rows.
-
-        Returns the poses dict for this frame. Video encode is offloaded to a
-        background thread; everything else runs here so flight timestamps and
-        pose stay on one clock.
         """
         # if logging drone data (kept on the main thread for timestamp alignment)
         if self.flight_logger is not None and self.mav is not None:
@@ -464,6 +520,7 @@ class MarkerPoseRecorder:
             prev_handler = None
 
         seq = 0
+        grabbed = 0
         try:
             self.open(camera_index)
             self._grabber = _FrameGrabber(self.cap)
@@ -477,7 +534,10 @@ class MarkerPoseRecorder:
                 frame, seq = self._grabber.read(seq)
                 if frame is None:                # camera stopped
                     break
-                self.process_frame(frame)
+                # keep every Nth frame; the camera has no slower native rate
+                if grabbed % self.frame_stride == 0:
+                    self.process_frame(frame)
+                grabbed += 1
         except KeyboardInterrupt:
             pass
         finally:
@@ -491,7 +551,8 @@ class MarkerPoseRecorder:
                         pass
 
     def stop(self):
-        """Request the run() loop to exit. Safe to call from another thread.
+        """
+        Request the run() loop to exit. Safe to call from another thread.
 
         Sets the stop flag and wakes the grabber so a blocked read() returns;
         run()'s finally then flushes video/CSV via close(). Idempotent, and a
@@ -505,7 +566,7 @@ class MarkerPoseRecorder:
         # stop pulling new frames first, then drain what's already queued
         if self._grabber is not None:
             self._grabber.stop()
-            self._grabber.join(timeout=1.0)
+            self._grabber.join(timeout=1)
             self._grabber = None
         if self._preview is not None:
             self._preview.stop()
@@ -528,11 +589,11 @@ class MarkerPoseRecorder:
 
         if self._t0 is not None and self.frame_idx > 0:
             elapsed = time.time() - self._t0
-            achieved = self.frame_idx / elapsed if elapsed > 0 else 0.0
+            achieved = self.frame_idx / elapsed if elapsed > 0 else 0
             print(f"saved {self.frame_idx} frames to {self.video_out} "
                   f"and poses to {self.csv_out}")
             print(f"achieved {achieved:.1f} fps "
-                  f"(video header says {self.fps} fps -- "
+                  f"(video header says {self.fps:g} fps -- "
                   f"playback speed is only correct if these match; "
                   f"CSV time_s is the ground truth)")
 
@@ -546,9 +607,10 @@ class MarkerPoseRecorder:
 
 if __name__ == '__main__':
     recorder = MarkerPoseRecorder(
-        calibration_path="calibration.json",
-        marker_size_m=0.1356,
+        marker_size_m=0.17,
         video_out="recording.avi",
         csv_out="poses.csv",
-        fps=60)
+        capture_fps=48,
+        frame_stride=1,
+        preview_port=8080)          # 2 -> 24 fps, 3 -> 16 fps, 4 -> 12 fps
     recorder.run()

@@ -1,0 +1,50 @@
+"""
+This test is for running the closed-loop payload reference tracker and payload lqr control system with payload state estimator
+"""
+from datetime import datetime
+
+from payload_tracking.aruco_lib import MarkerPoseRecorder
+
+import comms.common as comms
+import comms.camera as cam
+from comms.control import ControlComms
+
+
+from logs.flight import FlightLogger
+
+if __name__ == "__main__":
+    # connection = "/dev/ttyACM0"
+    # baud = 115200
+    connection = "udp:127.0.0.1:14550"
+    control_freq = 50
+
+    # live view config
+    preview_port = 8080 # live view; set None to disable
+    track_marker_ids = [232, 245, 233]   # only log these ids; None = all
+
+    # add baud here if connected to real drone
+    m = comms.connect(connection)
+
+    # initialize drone logger
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"data/test_08072026/camera_test_{stamp}"
+    video_out = f"{data_dir}/recording.avi"
+    poses_out = f"{data_dir}/poses.csv"
+
+    logger = FlightLogger(data_dir=f"{data_dir}")
+
+    # intializing the contorl object will get the fast state for the logger
+    controlLink = ControlComms(m, control_frequency=control_freq, logger=logger)
+
+    # begin payload recording
+    rec = MarkerPoseRecorder(marker_size_m=0.17,
+                             video_out=video_out,
+                             csv_out=poses_out,
+                             fps=24,
+                             marker_ids=track_marker_ids,
+                             flight_logger=logger,
+                             preview_port=preview_port)
+    try:
+        rec.run(mav=m)
+    finally:
+        logger.close()
