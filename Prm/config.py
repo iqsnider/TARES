@@ -35,6 +35,14 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 ##### camera tracking parameters #####
 
+# settings
+CAM_GAIN = 1
+CAM_EXP_ABS = 5
+CAM_PREVIEW_PORT = None
+CAM_FPS = 48
+CAM_STRIDE = 1
+
+
 # camera offsets, referenced to the front of the drone
 CAM_OFFSET_X = -0.34 # [m] (0.34 m port side)
 CAM_OFFSET_Y = 0.12 # [m] (0.12 m in front of drone)
@@ -58,7 +66,7 @@ CAM_R = R_MOUNT@R_CAM_DOWN
 # payload marker parameters
 MARKER_EDGE_LEN = 0.17 # [m]
 MARKER_CENTER_TO_CENTER_DIST = 0.505 # [m]
-LEFT_MARKER_ID = 232
+LEFT_MARKER_ID = 30
 CENTER_MARKER_ID = 245
 RIGHT_MARKER_ID = 233
 

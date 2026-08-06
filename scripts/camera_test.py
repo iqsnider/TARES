@@ -17,17 +17,17 @@ import Prm.config as config
 from logs.flight import FlightLogger
 
 if __name__ == "__main__":
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
-    control_freq = 50
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
+    control_freq = config.CONTROL_FREQUENCY
 
     # live view config
     preview_port = None# 8080 # live view; set None to disable
     track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]   # only log these ids; None = all
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # initialize drone logger
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -44,13 +44,13 @@ if __name__ == "__main__":
     rec = MarkerPoseRecorder(marker_size_m=config.MARKER_EDGE_LEN,
                              video_out=video_out,
                              csv_out=poses_out,
-                             capture_fps=48,
-                             frame_stride=1,      # 48/2 = 24 fps recorded
+                             capture_fps=config.CAM_FPS,
+                             frame_stride=config.CAM_STRIDE,
                              marker_ids=track_marker_ids,
                              flight_logger=logger,
-                             preview_port=preview_port,
-                             gain=40,
-                             exposure_abs=10)
+                             preview_port=config.CAM_PREVIEW_PORT,
+                             gain=config.CAM_GAIN,
+                             exposure_abs=config.CAM_EXP_ABS)
     try:
         rec.run(mav=m)
     finally:

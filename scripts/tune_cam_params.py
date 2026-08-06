@@ -29,8 +29,8 @@ import Prm.config as config
 
 
 # units of 100us: 2 = 0.2 ms ... 40 = 4 ms
-EXPOSURES = [10, 20, 40, 60, 80, 100]
-GAINS = [20, 40, 70]
+EXPOSURES = [1, 2, 3, 5, 8, 12]
+GAINS = [1, 5, 10]
 
 DWELL_S = 8.0          # recording time per combination
 SETTLE_S = 2.0         # let the device settle between runs

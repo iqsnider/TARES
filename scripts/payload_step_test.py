@@ -20,11 +20,11 @@ from datetime import datetime
 
 
 if __name__ == '__main__':
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
-    takeoff_altitude = 15
-    control_freq = 50
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
+    # takeoff_altitude = 15
+    control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
     # marker / camera-output config
@@ -37,7 +37,7 @@ if __name__ == '__main__':
     poses_out = f"{data_dir}/poses.csv"
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # check for armability
     comms.wait_until_armable(m)
@@ -49,10 +49,10 @@ if __name__ == '__main__':
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    comms.arm(m)
-
-    # CLEAR THE AREA
-    comms.takeoff(m, takeoff_altitude)
+    # comms.arm(m)
+    #
+    # # CLEAR THE AREA
+    # comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
@@ -64,8 +64,10 @@ if __name__ == '__main__':
         csv_out=poses_out,
         marker_ids=track_marker_ids,
         preview_port=preview_port,
-        capture_fps=48,
-        frame_stride=1)
+        capture_fps=config.CAM_FPS,
+        frame_stride=config.CAM_STRIDE,
+        gain=config.CAM_GAIN,
+        exposure_abs=config.CAM_EXP_ABS)
 
     controlLink = None
     try:

@@ -366,10 +366,13 @@ class MarkerPoseRecorder:
         to manual.
         """
         dev = f"/dev/video{camera_index}"
-        subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
-        subprocess.run(["v4l2-ctl", "-d", dev,
-                        "-c", f"exposure_time_absolute={self.exposure_abs}",
-                        "-c", f"gain={self.gain}"])
+        if self.exposure_abs is not None:
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
+            subprocess.run(["v4l2-ctl", "-d", dev,
+                            "-c", f"exposure_time_absolute={self.exposure_abs}"])
+        else:
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
+        subprocess.run(["v4l2-ctl", "-d", dev, "-c", f"gain={self.gain}"])        
         readback = subprocess.run(
             ["v4l2-ctl", "-d", dev, "-C",
              "auto_exposure,exposure_time_absolute,gain"],
