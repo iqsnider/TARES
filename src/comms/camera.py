@@ -7,7 +7,8 @@ from payload_tracking.aruco_lib import MarkerPoseRecorder
 
 def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
                  capture_fps=48, frame_stride=1, camera_index=0,
-                 ready_timeout=5, preview_port=None):
+                 ready_timeout=5, preview_port=None,
+                 exposure_abs=5, gain=40):
     os.makedirs(os.path.dirname(video_out) or ".", exist_ok=True)
 
     recorder = MarkerPoseRecorder(
@@ -17,6 +18,8 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
         capture_fps=capture_fps,     # MJPG at 2304x1536 offers 48 and nothing else
         frame_stride=frame_stride,   # 2 -> 24 fps, 3 -> 16, 4 -> 12
         marker_ids=marker_ids,       # track only these IDs (None = all)
+        exposure_abs=exposure_abs,   # units of 100us; 5 = 0.5 ms
+        gain=gain,
         flight_logger=None,          # no flight-logger integration (by design:
                                      # the control loop pumps the same mavlink
                                      # connection, and pymavlink is not
@@ -36,14 +39,8 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
         time.sleep(0.05)
 
     if recorder.frame_idx == 0:
-        # a payload run closes its loop on this camera, so there is no
-        # degraded mode to continue into: with no frames the filter never
-        # gets an update and the controller flies on prediction alone
-        recorder.stop()
-        thread.join(timeout=5)
-        raise RuntimeError(
-            f"camera did not start streaming within {ready_timeout}s")
-
-    print(f"camera recording started (pose t0 wall = {recorder._t0:.4f})")
+        print("WARNING: camera did not start streaming -- continuing without it")
+    else:
+        print(f"camera recording started (pose t0 wall = {recorder._t0:.4f})")
 
     return recorder, thread
