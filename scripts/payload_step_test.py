@@ -28,7 +28,6 @@ if __name__ == '__main__':
     speed = 1
 
     # marker / camera-output config
-    marker_size_m = 0.17
     track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]   # only these are logged; others dropped
     preview_port = None                  # live MJPEG view; None to disable
 
@@ -107,6 +106,7 @@ if __name__ == '__main__':
     finally:
         # stop the camera first so it flushes its video and pose csv
         # then close the flight logger
+        comms.set_mode(m, "BRAKE")
         recorder.stop()
         cam_thread.join(timeout=5)
         logger.close()

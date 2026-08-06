@@ -74,11 +74,6 @@ class SafeTrajectory:
     def payload_trajectory(self):
         """
         Computes the reference trajectory object for the payload
-
-        One tether length below the drone path. tether_equilibrium_state adds
-        the offset back to get the drone setpoint, so this must subtract it --
-        passing a drone-height reference here would command a climb of one
-        tether length.
         """
         tether = np.array([0, 0, config.TETHER_LEN])
         reference_trajectory_obj = drone_only_mission.ReferenceTrajectory(self.p0 - tether, self.p1 - tether, self.speed,
