@@ -19,12 +19,6 @@ def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5):
     """
     Build an EKF seeded from the current drone attitude and the first
     payload detection.
-
-    The camera is streaming by the time this is called but the first frames
-    often carry no marker, so the detection is waited for rather than
-    assumed. Payload yaw is not derivable from the drone, and seeding it with
-    the drone's own yaw would hand the controller an orientation nothing ever
-    measured -- so no detection is a failure, not a fallback.
     """
     c = logger.cache
     phi, theta, psi = c["roll"], c["pitch"], c["yaw"]

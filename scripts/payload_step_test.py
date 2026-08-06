@@ -49,10 +49,10 @@ if __name__ == '__main__':
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    # comms.arm(m)
-    #
-    # # CLEAR THE AREA
-    # comms.takeoff(m, takeoff_altitude)
+    comms.arm(m)
+
+    # CLEAR THE AREA
+    comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
@@ -75,8 +75,8 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
-        startPointHoverTime = 5
-        endPointHoverTime = 5
+        startPointHoverTime = 10
+        endPointHoverTime = 10
 
         # ENU to ENU. payload_trajectory()
         # reference is where payload should be
