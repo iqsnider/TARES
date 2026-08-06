@@ -65,9 +65,9 @@ class ControlComms:
         """
         self.logger.note_sent(mode=self.m.flightmode)
 
-        # block for the first real state before commanding anything
+        # wait for attitude and NED
         t_wait = time.time() + 5
-        while self.x0 is None:
+        while self.x0 is None or np.isnan(self.logger.cache['yaw']):
             # get values from fc
             self.logger.pump(self.m)
 
@@ -75,10 +75,22 @@ class ControlComms:
             self.x0 = self.get_state_enu(self.logger.cache['ned'], prev=None)
 
             if time.time() > t_wait:
-                raise RuntimeError("no LOCAL_POSITION_NED within 5s")
+                raise RuntimeError(
+                    "no LOCAL_POSITION_NED / ATTITUDE within 5s")
 
             # wait 10ms before retrying
             time.sleep(0.01)
+
+
+    def _wait_fresh_state(self):
+        """
+        Pump until a new LOCAL_POSITION_NED arrives, so the first control tick
+        isn't computed from a state that went stale during setup.
+        """
+        stale = self.logger.cache['fc_time_boot_ms']
+        while self.logger.cache['fc_time_boot_ms'] == stale:
+            self.logger.pump(self.m)
+            time.sleep(0.002)
 
     @staticmethod
     def enu_ned(v):
@@ -183,6 +195,7 @@ class ControlComms:
         dt = 1/self.hz
 
         # get initial state
+        self._wait_fresh_state()
         x = self.x0
 
         # set yaw_ref to current yaw when yaw locking and no yaw reference is specified
@@ -244,6 +257,7 @@ class ControlComms:
         L = config.TETHER_LEN
 
         # get initial state
+        self._wait_fresh_state()
         x = self.x0
 
         # set yaw_ref to current yaw when yaw locking and no yaw reference is specified

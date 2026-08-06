@@ -42,8 +42,6 @@ if __name__ == '__main__':
     # check for armability
     comms.wait_until_armable(m)
 
-    # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
-    comms.set_guid_options(m, 48)
 
     # GUIDED mode is easiest for external commands
     comms.set_mode(m, "GUIDED")
@@ -98,6 +96,10 @@ if __name__ == '__main__':
 
         # run autonomy
         print("running payload controller...")
+
+        # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
+        comms.set_guid_options(m, 48)
+
         controlLink.fly_payload_trajectory(ref,
                                            controller,
                                            duration=ref.duration,
@@ -114,6 +116,7 @@ if __name__ == '__main__':
             # must not cost us the recording as well.
             # stop the camera first so it flushes its video and pose csv
             # then close the flight logger
+            comms.set_guid_options(m, 0)
             recorder.stop()
             cam_thread.join(timeout=5)
             logger.close()
