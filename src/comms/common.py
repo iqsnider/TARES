@@ -36,21 +36,31 @@ def wait_until_armable(m, timeout=60):
     raise TimeoutError("EKF/GPS never stabilized")
 
 
-def set_mode(m, mode_name):
+def set_mode(m, mode_name, timeout=5):
     """
     Set the copter mode
+
+    Gives up rather than waiting forever. This gets called from cleanup paths
+    with the vehicle still in the air, where a command the autopilot never
+    acts on would otherwise wedge the script mid-flight and take the flight
+    data down with it.
     """
-    m.wait_heartbeat() # the heartbeat tells us the vehicle type which ensures that an unknown mode does not get enabled
+    # the heartbeat tells us the vehicle type which ensures that an unknown mode does not get enabled
+    if m.wait_heartbeat(timeout=timeout) is None:
+        raise TimeoutError(f"no heartbeat within {timeout}s, cannot set {mode_name}")
+
     mode_id = m.mode_mapping()[mode_name]
     m.mav.set_mode_send(m.target_system,
                         mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
                         mode_id)
 
-    while True:
-        heartbeat = m.recv_match(type="HEARTBEAT", blocking=True)
-        if heartbeat.custom_mode == mode_id:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        heartbeat = m.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
+        if heartbeat and heartbeat.custom_mode == mode_id:
             print(f"mode = {mode_name}")
             return
+    raise TimeoutError(f"mode did not change to {mode_name} within {timeout}s")
 
 
 def arm(m):

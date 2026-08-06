@@ -41,6 +41,10 @@ class ControlComms:
         self.hz = control_frequency
         self.x0 = None
 
+        # set once a control loop sees the pilot take the aircraft back;
+        # defined here so cleanup can read it even if no loop ever ran
+        self.pilot_override = False
+
         # tell mavlink to stream data faster
         self._request_fast_state()
 
@@ -256,6 +260,14 @@ class ControlComms:
 
         last_seq = -1
 
+        # the loop time the filter last integrated to; None until the first
+        # pass, which has no elapsed time to measure and uses the nominal one
+        t_prev = None
+
+        # set when the pilot takes the aircraft back, so the caller knows the
+        # vehicle is no longer ours to command on the way out
+        self.pilot_override = False
+
         # intialize time for control loop
         t0 = time.time()
         next_t = t0
@@ -264,6 +276,16 @@ class ControlComms:
         while (t := time.time() - t0) <= duration:
             self.logger.pump(self.m)
             c = self.logger.cache
+
+            # the pilot flipping out of GUIDED ends the test. ardupilot is
+            # already ignoring our setpoints at that point, so the only thing
+            # left to get right is to stop and not touch the vehicle again.
+            # '?' is the state before the first heartbeat has been seen.
+            if c['echoed_mode'] not in ("GUIDED", "?"):
+                self.pilot_override = True
+                print(f"pilot override: mode is {c['echoed_mode']}, "
+                      f"stopping at t={t:.1f}s")
+                break
 
             if reassert:
                 self._debug_stream_rate(t, dbg)
@@ -278,8 +300,14 @@ class ControlComms:
             else:
                 last_seq = seq
 
+            # predict over the time that actually passed, not the period we
+            # asked for: a loop that slips would otherwise advance the swing
+            # dynamics short and hand the controller a stale estimate
+            dt_ekf = dt if t_prev is None else t - t_prev
+            t_prev = t
+
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, _ = est.step_ekf(ekf, poses, a_I, dt,
+            xi, _ = est.step_ekf(ekf, poses, a_I, dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # payload reference, lifted to the drone equilibrium
@@ -304,7 +332,7 @@ class ControlComms:
 
             # log sent values. drone_*_ref is the lifted equilibrium the drone
             # is actually chasing; payload_*_ref is what the mission asked for.
-            self.logger.log(t, x, x_ref[0:3], x_ref[3:6], u,
+            self.logger.log(t, x, u=u,
                             yaw_ref=yaw_ref if yaw_ref is not None else 0,
                             payload_p_ref=p_ref,
                             payload_v_ref=v_ref,

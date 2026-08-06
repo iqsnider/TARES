@@ -133,6 +133,26 @@ def summarise(records, meas_df):
 # --------------------------------------------------------------------------
 # plots
 # --------------------------------------------------------------------------
+REF_COLS = {"payload": ("payload_px_ref", "payload_py_ref", "payload_pz_ref"),
+            "drone": ("drone_px_ref", "drone_py_ref", "drone_pz_ref")}
+
+
+def flown_reference(fl):
+    """The reference this flight was tracking: ('payload'|'drone', Nx3 ENU).
+
+    The log holds both sets of columns side by side and the controller fills
+    in only the one it was following, so the pair that carries data says what
+    the run was for. Drawing the payload reference where there is one is the
+    whole comparison: the drone flies wherever it must, and what is supposed
+    to land on the dashed line is the payload, not the aircraft. None when
+    the run tracked neither -- a hand-flown or hover log.
+    """
+    which = catalog.flown_reference(fl)
+    if which not in REF_COLS or not set(REF_COLS[which]) <= set(fl.columns):
+        return None
+    return which, fl[list(REF_COLS[which])].to_numpy(float)
+
+
 def _set_equal_3d(ax, X, Y, Z):
     r = max(np.ptp(X), np.ptp(Y), np.ptp(Z)) / 2 or 1.0
     cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
@@ -163,11 +183,19 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
     fig = plt.figure(figsize=(9.5, 8.5))
     ax = fig.add_subplot(111, projection="3d")
     drone_ln, = ax.plot(E, N, U, color=C_DRONE, lw=2.0, label="Drone")
-    ref_ln = None
-    if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(fl.columns):
-        ref_ln, = ax.plot(fl.drone_px_ref, fl.drone_py_ref, fl.drone_pz_ref,
+
+    # whichever of the two references this run was flying, so a payload-
+    # tracking run is not silently drawn against an empty drone reference
+    ref = flown_reference(fl)
+    ref_ln, ref_xyz = None, np.empty((0, 3))
+    if ref is not None:
+        which, ref_xyz = ref
+        # over the tracks rather than under them: a payload reference runs
+        # right where the payload does, which is the point, and a 1.6pt line
+        # drawn first vanishes beneath the 2pt one it is being compared with
+        ref_ln, = ax.plot(ref_xyz[:, 0], ref_xyz[:, 1], ref_xyz[:, 2],
                           color=C_REF, lw=1.6, linestyle=(0, (5, 4)),
-                          label="Drone reference")
+                          zorder=5, label=f"{which.capitalize()} reference")
 
     finite = np.flatnonzero(np.isfinite(pE))
     tethers = [ax.plot([E[k], pE[k]], [N[k], pN[k]], [U[k], pU[k]],
@@ -196,10 +224,13 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
     ax.set_zlabel("Up [m]")
     ax.set_title("Experiment: Drone and Payload, "
                  "Camera Measurement vs EKF")
+    # the reference belongs in the box too: a payload reference sits a tether
+    # below the drone, so leaving it out would crop it off the bottom
+    ref_ok = ref_xyz[np.isfinite(ref_xyz).all(axis=1)]
     _set_equal_3d(ax,
-                  np.concatenate([E, pE[finite], est_enu[:, 0]]),
-                  np.concatenate([N, pN[finite], est_enu[:, 1]]),
-                  np.concatenate([U, pU[finite], est_enu[:, 2]]))
+                  np.concatenate([E, pE[finite], est_enu[:, 0], ref_ok[:, 0]]),
+                  np.concatenate([N, pN[finite], est_enu[:, 1], ref_ok[:, 1]]),
+                  np.concatenate([U, pU[finite], est_enu[:, 2], ref_ok[:, 2]]))
 
     # same running order as the simulation figure, which draws its artists in
     # a different sequence than this one does
@@ -222,8 +253,7 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
         s.span(live_tether, np.c_[E, N, U], est_enu, t_b=est_t)
         s.group(tethers, t[finite[::25]])
         if ref_ln is not None:
-            s.line(ref_ln, fl[["drone_px_ref", "drone_py_ref",
-                               "drone_pz_ref"]].to_numpy())
+            s.line(ref_ln, ref_xyz)
     return fig
 
 

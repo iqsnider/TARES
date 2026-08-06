@@ -36,8 +36,14 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
         time.sleep(0.05)
 
     if recorder.frame_idx == 0:
-        print("WARNING: camera did not start streaming -- continuing without it")
-    else:
-        print(f"camera recording started (pose t0 wall = {recorder._t0:.4f})")
+        # a payload run closes its loop on this camera, so there is no
+        # degraded mode to continue into: with no frames the filter never
+        # gets an update and the controller flies on prediction alone
+        recorder.stop()
+        thread.join(timeout=5)
+        raise RuntimeError(
+            f"camera did not start streaming within {ready_timeout}s")
+
+    print(f"camera recording started (pose t0 wall = {recorder._t0:.4f})")
 
     return recorder, thread

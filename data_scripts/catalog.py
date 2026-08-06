@@ -237,12 +237,19 @@ class Session:
         if "drone_pz_meas" in d:
             out["alt"] = float(d.drone_pz_meas.max())
         # the log carries both reference sets; the one that was flown is filled
-        out["ref"] = _flown_reference(d)
+        out["ref"] = flown_reference(d)
         return out
 
 
-def _flown_reference(d):
-    """Which reference the flight actually tracked, read off the log."""
+def flown_reference(d):
+    """Which reference the flight actually tracked: 'payload', 'drone' or '?'.
+
+    Every log carries both sets of columns and the controller fills in only
+    the one it was following, so this is read off the data rather than
+    configured. A payload reference outranks a drone reference: a run that
+    has one was steering the drone in order to put the payload somewhere,
+    which is the thing that run was about.
+    """
     def used(col):
         return col in d and d[col].notna().any() and d[col].abs().max() > 0
     if used("payload_px_ref"):

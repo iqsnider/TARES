@@ -49,16 +49,15 @@ if __name__ == '__main__':
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    comms.arm(m)
-
-    # CLEAR THE AREA
-    comms.takeoff(m, takeoff_altitude)
+    # comms.arm(m)
+    #
+    # # CLEAR THE AREA
+    # comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
 
-    # start the camera first: the estimator seeds payload yaw from the first
-    # detection, and a closed-loop payload run is not safe without it
+    # start camera first
     recorder, cam_thread = cam.start_camera(
         marker_size_m=config.MARKER_EDGE_LEN,
         video_out=video_out,
@@ -68,34 +67,35 @@ if __name__ == '__main__':
         capture_fps=48,
         frame_stride=1)
 
-    # initalize control communications and prepare datastream for high rate control requests
-    controlLink = ControlComms(m,
-                               control_frequency=control_freq,
-                               logger=logger)
-
-    # mission reference
-    startPointHoverTime = 5
-    endPointHoverTime = 5
-
-    # ENU to ENU. payload_trajectory() offsets one tether length below the
-    # drone's current position, so the reference is where the PAYLOAD should be
-    ref = mission.SafeTrajectory(m, None, [-20, 0, 0], speed=speed,
-                                 startPointHoverTime=startPointHoverTime,
-                                 endPointHoverTime=endPointHoverTime,
-                                 startFromCurrentPosition=True,
-                                 relativeEnd=True,
-                                 logger=logger).payload_trajectory()
-
-    # define outer-loop control law
-    controller = dynamics.OuterLoopPayloadLQR()
-
-    # payload swing estimator: attitude comes from the logger cache, which
-    # ControlComms has already populated by blocking for the first state
-    ekf = est.start_ekf(logger, recorder=recorder)
-
-    # run autonomy
-    print("running payload controller...")
+    controlLink = None
     try:
+        # initalize control communications and prepare datastream for high rate control requests
+        controlLink = ControlComms(m,
+                                   control_frequency=control_freq,
+                                   logger=logger)
+
+        # mission reference
+        startPointHoverTime = 5
+        endPointHoverTime = 5
+
+        # ENU to ENU. payload_trajectory()
+        # reference is where payload should be
+        ref = mission.SafeTrajectory(m, None, [-20, 0, 0], speed=speed,
+                                     startPointHoverTime=startPointHoverTime,
+                                     endPointHoverTime=endPointHoverTime,
+                                     startFromCurrentPosition=True,
+                                     relativeEnd=True,
+                                     logger=logger).payload_trajectory()
+
+        # define outer-loop control law
+        controller = dynamics.OuterLoopPayloadLQR()
+
+        # payload swing estimator: attitude comes from the logger cache, which
+        # ControlComms has already populated by blocking for the first state
+        ekf = est.start_ekf(logger, recorder=recorder)
+
+        # run autonomy
+        print("running payload controller...")
         controlLink.fly_payload_trajectory(ref,
                                            controller,
                                            duration=ref.duration,
@@ -104,9 +104,14 @@ if __name__ == '__main__':
                                            yaw_lock=True,
                                            reassert=False)
     finally:
-        # stop the camera first so it flushes its video and pose csv
-        # then close the flight logger
-        comms.set_mode(m, "BRAKE")
-        recorder.stop()
-        cam_thread.join(timeout=5)
-        logger.close()
+        try:
+            if controlLink is None or not controlLink.pilot_override:
+                comms.set_mode(m, "BRAKE")
+        finally:
+            # flush whatever happened above: a mode change that times out
+            # must not cost us the recording as well.
+            # stop the camera first so it flushes its video and pose csv
+            # then close the flight logger
+            recorder.stop()
+            cam_thread.join(timeout=5)
+            logger.close()
