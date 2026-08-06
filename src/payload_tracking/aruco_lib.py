@@ -242,7 +242,7 @@ class MarkerPoseRecorder:
                  height=1536,
                  pixel_format="MJPG",
                  exposure_abs=5,               # units of 100us; 5 = 0.5 ms
-                 gain=30,
+                 gain=40,
                  aruco_dict=cv2.aruco.DICT_4X4_250,
                  marker_ids=None,
                  flight_logger=None,
@@ -323,6 +323,7 @@ class MarkerPoseRecorder:
         self.csv_writer = None
         self.frame_idx = 0
         self._t0 = None
+        self._latest = (-1, {})      # (frame_idx, poses) for the control loop
 
         # threading handles
         self._grabber = None
@@ -365,7 +366,7 @@ class MarkerPoseRecorder:
         to manual.
         """
         dev = f"/dev/video{camera_index}"
-        subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
+        subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
         subprocess.run(["v4l2-ctl", "-d", dev,
                         "-c", f"exposure_time_absolute={self.exposure_abs}",
                         "-c", f"gain={self.gain}"])
@@ -440,11 +441,12 @@ class MarkerPoseRecorder:
 
         self.csv_file = open(self.csv_out, "w", newline="")
         self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(["frame", "time_s", "marker_id",
+        self.csv_writer.writerow(["frame", "wall_time", "time_s", "marker_id",
                                   "rx", "ry", "rz", "x", "y", "z", "range_m",
                                   "u_px", "v_px"])
 
         self.frame_idx = 0
+        self._latest = (-1, {})      # drop detections from any prior session
         self._t0 = time.time()
         return self
 
@@ -472,7 +474,10 @@ class MarkerPoseRecorder:
                 centers[int(marker_id)] = c
 
         verbose = self.print_every and (self.frame_idx % self.print_every == 0)
-        t = time.time() - self._t0
+        # one clock read: wall_time joins against the flight log's wall_time
+        # column, time_s stays the elapsed value measured from self._t0
+        now = time.time()
+        t = now - self._t0
         if poses:
             for marker_id, (rvec, tvec) in poses.items():
                 cv2.drawFrameAxes(frame, self.mtx, self.dist, rvec,
@@ -484,7 +489,7 @@ class MarkerPoseRecorder:
                     print(f"id {marker_id}: x={x:+.3f} y={y:+.3f} z={z:+.3f} m  "
                           f"range={dist_m:.3f} m")
                 u, v = centers[marker_id]
-                self.csv_writer.writerow([self.frame_idx, f"{t:.4f}", marker_id,
+                self.csv_writer.writerow([self.frame_idx, f"{now:.4f}", f"{t:.4f}", marker_id,
                                           f"{rx:.6f}", f"{ry:.6f}", f"{rz:.6f}",
                                           f"{x:.6f}", f"{y:.6f}", f"{z:.6f}", f"{dist_m:.6f}",
                                           f"{u:.2f}", f"{v:.2f}"])
@@ -493,14 +498,26 @@ class MarkerPoseRecorder:
             if verbose:
                 print("no marker detected")
             self.csv_writer.writerow(
-                [self.frame_idx, f"{t:.4f}", nan,
+                [self.frame_idx, f"{now:.4f}", f"{t:.4f}", nan,
                  nan, nan, nan, nan, nan, nan, nan, nan, nan])
 
         if self._preview is not None:
             self._preview.update(frame)      # before submit: stays live under writer backpressure
+        # publish before submit(): submit() blocks under writer backpressure,
+        # and the control loop should see the detection as soon as it exists
+        self._latest = (self.frame_idx, poses)
         self._awriter.submit(frame)
         self.frame_idx += 1
         return poses
+
+    def latest_poses(self):
+        """Most recent (frame_idx, poses) for a consumer on another thread.
+
+        No lock: this is a single tuple rebind, which is atomic under the GIL,
+        and readers never mutate. The frame_idx lets a consumer running faster
+        than the camera tell a new detection from one it has already used.
+        """
+        return self._latest
 
     def run(self, camera_index=0, mav=None):
         """Open everything and record until Ctrl+C or camera failure."""
@@ -611,6 +628,5 @@ if __name__ == '__main__':
         video_out="recording.avi",
         csv_out="poses.csv",
         capture_fps=48,
-        frame_stride=1,
-        preview_port=8080)          # 2 -> 24 fps, 3 -> 16 fps, 4 -> 12 fps
+        frame_stride=1)          # 2 -> 24 fps, 3 -> 16 fps, 4 -> 12 fps
     recorder.run()

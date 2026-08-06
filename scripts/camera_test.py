@@ -22,14 +22,14 @@ if __name__ == "__main__":
 
     # live view config
     preview_port = 8080 # live view; set None to disable
-    track_marker_ids = [232, 245, 233]   # only log these ids; None = all
+    track_marker_ids = [241, 232, 245, 233]   # only log these ids; None = all
 
     # add baud here if connected to real drone
     m = comms.connect(connection)
 
     # initialize drone logger
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08072026/camera_test_{stamp}"
+    data_dir = f"data/pretest_08072026/camera_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -42,7 +42,8 @@ if __name__ == "__main__":
     rec = MarkerPoseRecorder(marker_size_m=0.17,
                              video_out=video_out,
                              csv_out=poses_out,
-                             fps=24,
+                             capture_fps=48,
+                             frame_stride=1,      # 48/2 = 24 fps recorded
                              marker_ids=track_marker_ids,
                              flight_logger=logger,
                              preview_port=preview_port)

@@ -2,7 +2,7 @@ import numpy as np
 
 import Prm.config as config
 import sim.dynamics as dynamics
-from sim.payload_mission_manager import tether_equilibrium_state
+from sim.dynamics import tether_equilibrium_state
 
 # architecture used when none is requested
 DEFAULT_ARCHITECTURE = 'payload_lqr'

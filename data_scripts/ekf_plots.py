@@ -7,8 +7,9 @@ Run the payload EKF on a recorded flight and produce:
   3. with --cam, the camera recording written back out as an .avi with the
      estimated payload position drawn on every frame
 
-The pose CSV has no wall clock, so the offset between the two logs comes off
-the session (sessions.toml).
+Both logs stamp every row with the same wall clock, so the offset between the
+two comes off the files themselves (see `catalog.Session.pose_offset`); older
+runs, recorded before poses.csv carried wall_time, fall back to sessions.toml.
 """
 import json
 from pathlib import Path
@@ -79,8 +80,9 @@ def analyse(session, verbose=True):
     """Run the payload EKF over a session. Returns what the plots need.
 
     Everything the filter depends on that is not in the data itself -- the
-    clock offset, the tether lengths -- comes off the session (i.e. out of
-    sessions.toml), so there are no paths or constants here.
+    tether lengths -- comes off the session, so there are no paths or
+    constants here. The clock offset comes off the session too, which reads
+    it from the two logs' shared wall clock.
     """
     if not session.has_camera:
         raise SystemExit(f"session {session.id} has no camera data")
@@ -92,6 +94,7 @@ def analyse(session, verbose=True):
     records = run_full(frames, inp, offset)
     meas_df = direct_measurement(frames, inp, offset)
     if verbose:
+        print(f"pose clock -> flight clock: {offset:+.3f} s")
         print(f"{len(records)} filter steps, "
               f"{sum(r['n'] > 0 for r in records)} with a measurement")
     R = summarise(records, meas_df) if verbose else None

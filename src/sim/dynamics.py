@@ -10,6 +10,20 @@ def wrap_angle(a):
     return (a + np.pi) % (2*np.pi) - np.pi
 
 
+def tether_equilibrium_state(p_pl_ref, v_pl_ref, tether_length):
+    """
+    Build x* in R^16 from the payload reference
+    """
+    x_ref = np.zeros(16)
+    x_ref[0:3] = p_pl_ref + np.array([0, 0, tether_length])  # drone pos
+    x_ref[3:6] = v_pl_ref  # drone vel
+    # x_ref[6:9]  drone attitude = 0
+    # x_ref[9:12] drone ang vel = 0
+    # x_ref[12:14] tether angles  = 0
+    # x_ref[14:16] tether rates = 0
+    return x_ref
+
+
 def _build_double_integrator():
     """
     Linear translational model of the drone

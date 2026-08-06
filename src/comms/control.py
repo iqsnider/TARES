@@ -3,11 +3,11 @@ import time
 import numpy as np
 
 import Prm.config as config
-import sim.drone_test_only_mission_manager as mission
 import sim.dynamics as dynamics
 
 from logs.flight import FlightLogger
-from payload_tracking.aruco_lib import MarkerPoseRecorder
+
+import comms.estimator as est
 
 
 M = mavutil.mavlink
@@ -34,6 +34,7 @@ class ControlComms:
     A library of functions for sending/managing control communications for a given mav connection.
     Makes sure the time and logger are continuosly operating from object intialization.
     """
+
     def __init__(self, m, control_frequency=50, logger=None):
         # connection and frequency availability
         self.m = m
@@ -53,8 +54,6 @@ class ControlComms:
 
         # initialize control states
         self._initialize_control_logs()
-
-
 
     def _initialize_control_logs(self):
         """
@@ -77,14 +76,12 @@ class ControlComms:
             # wait 10ms before retrying
             time.sleep(0.01)
 
-
     @staticmethod
     def enu_ned(v):
         """
         (E,N,U) <-> (N,E,D), self-inverse
         """
         return np.array([v[1], v[0], -v[2]])
-
 
     def set_rate(self, name, hz):
         """
@@ -97,7 +94,6 @@ class ControlComms:
             self.m.target_system, self.m.target_component,
             M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
             msg_id, interval_us, 0, 0, 0, 0, 0)
-
 
     def _request_fast_state(self):
         """
@@ -117,7 +113,6 @@ class ControlComms:
             self.set_rate(name, rate)
             time.sleep(0.05)
 
-
     @staticmethod
     def get_state_enu(ned, prev=None):
         """
@@ -130,7 +125,6 @@ class ControlComms:
         v_enu = np.array([vy, vx, -vz])
 
         return np.concatenate([p_enu, v_enu])
-
 
     def send_accel(self, a_ned, yaw=None):
         """
@@ -154,7 +148,27 @@ class ControlComms:
                 0, 0)
         return mask
 
+    def _debug_stream_rate(self, t, state):
+        """
+        Report LOCAL_POSITION_NED arrival rate and re-assert the fast streams.
 
+        state is the mutable dict the caller keeps across iterations.
+        """
+        lp = self.logger.cache['fc_time_boot_ms']
+        if lp != state['last_lp']:
+            state['n_lp'] += 1
+            state['last_lp'] = lp
+
+        if t - state['last_report'] > 1:
+            print(f"LOCAL_POSITION_NED ~{state['n_lp']/(t-state['last_report']):.1f} Hz")
+            state['n_lp'] = 0
+            state['last_report'] = t
+
+        if t - state['last_reassert'] > 1:
+            self.set_rate("LOCAL_POSITION_NED", 50)
+            self.set_rate("ATTITUDE", 50)
+            self.set_rate("RAW_IMU", 50)
+            state['last_reassert'] = t
 
     def fly_drone_trajectory(self, ref, controller, duration, yaw_lock=True, yaw_ref=None, reassert=False):
         """
@@ -168,14 +182,14 @@ class ControlComms:
         x = self.x0
 
         # set yaw_ref to current yaw when yaw locking and no yaw reference is specified
-        if yaw_lock and yaw_ref==None:
+        if yaw_lock and yaw_ref is None:
             yaw_ref = self.logger.cache['yaw']
 
         # intiialize debugging values
-        last_reassert = 0
-        last_lp = self.logger.cache['fc_time_boot_ms']
-        last_report = 0
-        n_lp = 0
+        dbg = {'last_reassert': 0,
+               'last_lp': self.logger.cache['fc_time_boot_ms'],
+               'last_report': 0,
+               'n_lp': 0}
 
         # intialize time for control loop
         t0 = time.time()
@@ -185,25 +199,8 @@ class ControlComms:
         while (t := time.time() - t0) <= duration:
             self.logger.pump(self.m)
 
-            # debugging
             if reassert:
-                # checking frequency
-                lp = self.logger.cache['fc_time_boot_ms']
-                if lp != last_lp:
-                    n_lp += 1
-                    last_lp = lp
-
-                if t - last_report > 1:
-                    print(f"LOCAL_POSITION_NED ~{n_lp/(t-last_report):.1f} Hz")
-                    n_lp = 0
-                    last_report = t
-
-                # re-assert the fast stream 1 Hz
-                if t - last_reassert > 1:
-                    self.set_rate("LOCAL_POSITION_NED", 50)
-                    self.set_rate("ATTITUDE", 50)
-                    self.set_rate("RAW_IMU", 50)
-                    last_reassert = t
+                self._debug_stream_rate(t, dbg)
 
             # get current state p,v
             x = self.get_state_enu(self.logger.cache['ned'], prev=x)
@@ -229,25 +226,94 @@ class ControlComms:
             else:
                 self.logger.log(t, x, p_ref, v_ref, u)
 
-
             # time step
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
 
-
-    def get_payload_pose(self):
+    def fly_payload_trajectory(self, ref, controller, duration, recorder, ekf,
+                               yaw_lock=True, yaw_ref=None, reassert=False):
         """
-        Calculates the alpha_x, alpha_y, dalpha_x, and dalpha_y from the aruco pose data
+        Closed-loop payload reference tracking
         """
-        pass
+        # compute time step
+        dt = 1/self.hz
+        L = config.TETHER_LEN
 
+        # get initial state
+        x = self.x0
 
-    def fly_payload_trajectory(self):
-        """
-        fly the trajectory for payload tracking
-        """
-        pass
+        # set yaw_ref to current yaw when yaw locking and no yaw reference is specified
+        if yaw_lock and yaw_ref is None:
+            yaw_ref = self.logger.cache['yaw']
 
+        # intiialize debugging values
+        dbg = {'last_reassert': 0,
+               'last_lp': self.logger.cache['fc_time_boot_ms'],
+               'last_report': 0,
+               'n_lp': 0}
+
+        a_I = np.zeros(3)
+
+        last_seq = -1
+
+        # intialize time for control loop
+        t0 = time.time()
+        next_t = t0
+
+        # begin the control loop and run for the duration of the reference trajectory
+        while (t := time.time() - t0) <= duration:
+            self.logger.pump(self.m)
+            c = self.logger.cache
+
+            if reassert:
+                self._debug_stream_rate(t, dbg)
+
+            # get current drone state p,v
+            x = self.get_state_enu(c['ned'], prev=x)
+
+            # fold in the camera only when the frame is new
+            seq, poses = recorder.latest_poses()
+            if seq == last_seq:
+                poses = None
+            else:
+                last_seq = seq
+
+            # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
+            xi, _ = est.step_ekf(ekf, poses, a_I, dt,
+                                 c['roll'], c['pitch'], c['yaw'])
+
+            # payload reference, lifted to the drone equilibrium
+            p_ref, v_ref = ref(t)
+            x_ref = dynamics.tether_equilibrium_state(p_ref, v_ref, L)
+
+            # assemble the measured 16-state and compute the control input
+            x16 = est.payload_state_16(x, xi)
+            u = controller.compute_u(x16 - x_ref)
+
+            # carry the commanded acceleration into the next predict step
+            a_I = u
+
+            # set setpoint msg bitmasks depending on whether or not we are commanding yaw
+            if yaw_lock:
+                mask = self.send_accel(self.enu_ned(u), yaw=yaw_ref)
+            else:
+                mask = self.send_accel(self.enu_ned(u))
+
+            # confirm the bitmask with the FC
+            self.logger.note_sent(bitmask=mask)
+
+            # log sent values. drone_*_ref is the lifted equilibrium the drone
+            # is actually chasing; payload_*_ref is what the mission asked for.
+            self.logger.log(t, x, x_ref[0:3], x_ref[3:6], u,
+                            yaw_ref=yaw_ref if yaw_ref is not None else 0,
+                            payload_p_ref=p_ref,
+                            payload_v_ref=v_ref,
+                            payload_alpha=(xi[0], xi[1]),
+                            payload_alphadot=(xi[2], xi[3]))
+
+            # time step
+            next_t += dt
+            time.sleep(max(0, next_t - time.time()))
 
 
 def get_state_enu(ned, prev=None):
@@ -261,6 +327,7 @@ def get_state_enu(ned, prev=None):
     v_enu = np.array([vy, vx, -vz])
 
     return np.concatenate([p_enu, v_enu])
+
 
 # check math
 if __name__ == '__main__':

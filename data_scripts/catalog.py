@@ -12,9 +12,10 @@ by name instead of by path.
 
 Nothing here is written to disk and nothing needs maintaining: the walk costs
 about half a second over the whole archive, so the index is rebuilt on every
-call rather than cached and left to go stale. The one thing that cannot be
-derived from a filename -- the pose/flight clock offset, the tether lengths,
-your notes -- lives in sessions.toml next to this file.
+call rather than cached and left to go stale. What cannot be derived from the
+data -- the tether lengths, your notes -- lives in sessions.toml next to this
+file. The pose/flight clock offset used to live there too; both logs now stamp
+every row with the same wall clock, so it is read off the files instead.
 """
 import datetime as _dt
 import os
@@ -29,8 +30,14 @@ DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
 # Hand-written facts that no filename knows.
 META_FILE = Path(__file__).with_name("sessions.toml")
 
-# A camera run and its flight log start within a second or so of each other.
+# Pairing a camera run with its flight log, by folder stamp. The stamp is
+# taken when the recorder starts, which is before the camera device is open,
+# so it can sit well ahead of the first frame -- only good to a few seconds.
 PAIR_TOLERANCE_S = 5.0
+
+# Pairing on the wall_time both files now carry. That is the same clock read
+# in both, so the slack is only for the order the two were started in.
+WALL_TOLERANCE_S = 60.0
 
 _TS = re.compile(r"(\d{8})_(\d{6})")
 
@@ -70,6 +77,33 @@ def _as_date(token):
         except ValueError:
             continue
     return None
+
+
+def _first(path, column):
+    """The first row's `column`, or None if this log predates it.
+
+    One row is read, not the file, so this is cheap enough to call over the
+    whole archive.
+    """
+    import pandas as pd
+    try:
+        d = pd.read_csv(path, usecols=[column], nrows=1)
+    except (ValueError, OSError):
+        return None
+    return float(d[column].iloc[0]) if len(d) else None
+
+
+def _clock_epoch(path, elapsed_col):
+    """When a log's own clock started: wall_time minus its elapsed column.
+
+    Constant to well under a millisecond down the file -- both come off one
+    time.time() call per row -- so the first row settles it.
+    """
+    wall = _first(path, "wall_time")
+    elapsed = _first(path, elapsed_col)
+    if wall is None or elapsed is None:
+        return None
+    return wall - elapsed
 
 
 def _timestamp(name):
@@ -131,8 +165,29 @@ class Session:
         return {**doc.get("defaults", {}),
                 **doc.get("sessions", {}).get(self.id, {})}
 
+    @cached_property
+    def pose_offset(self):
+        """Pose clock -> flight clock [s]:  t_flight = t_pose - pose_offset.
+
+        Each log counts from its own start but stamps every row with the same
+        wall clock, so the offset is the difference of the two epochs and
+        there is nothing to measure. Runs recorded before the camera wrote
+        wall_time fall back to sessions.toml, and an entry written there by
+        hand still wins -- that is where a fitted value goes if the residual
+        camera latency ever turns out to matter.
+        """
+        own = _metadata().get("sessions", {}).get(self.id, {})
+        if "pose_offset" in own:
+            return float(own["pose_offset"])
+        if self.has_camera:
+            e_pose = _clock_epoch(self.pose, "time_s")
+            e_flight = _clock_epoch(self.flight, "cur_time")
+            if e_pose is not None and e_flight is not None:
+                return e_flight - e_pose
+        return float(self.meta.get("pose_offset", 0.0))
+
     def __getattr__(self, name):
-        # session.pose_offset, session.L_marker, ... come from sessions.toml
+        # session.L_marker, session.note, ... come from sessions.toml
         try:
             return self.meta[name]
         except KeyError:
@@ -246,8 +301,39 @@ def sessions(root=None):
 
         out.append(Session(sid, t, paths[0], pose, paths[1:]))
 
+    _pair_by_wall_clock(out, poses)
     out.sort(key=lambda s: s.time)
     return out
+
+
+def _pair_by_wall_clock(pool, poses):
+    """Attach the camera runs whose folder stamp landed too far off to pair.
+
+    The recorder stamps its folder when it starts and writes its first row
+    once the camera is actually open, which can be a quarter minute later --
+    far enough that the stamps of a run and its flight log disagree by more
+    than PAIR_TOLERANCE_S. The two files share a wall clock, so whatever the
+    first pass left over is matched on that instead. Runs older than the
+    wall_time column have nothing to match on and stay unpaired, exactly as
+    before.
+    """
+    attached = {s.pose for s in pool if s.has_camera}
+    left = [(p, _first(p, "wall_time")) for _, p in poses if p not in attached]
+    left = [(p, w) for p, w in left if w is not None]
+    if not left:
+        return
+
+    free = [(s, _first(s.flight, "wall_time")) for s in pool if not s.has_camera]
+    free = [(s, w) for s, w in free if w is not None]
+
+    for p, w in left:
+        hit, best = None, WALL_TOLERANCE_S
+        for s, wf in free:
+            if abs(w - wf) <= best:
+                hit, best = s, abs(w - wf)
+        if hit is not None:
+            hit.pose = p
+            free = [(s, wf) for s, wf in free if s is not hit]
 
 
 def unpaired_poses(root=None):

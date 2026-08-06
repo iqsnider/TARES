@@ -20,30 +20,31 @@ t_BC_B = np.array([config.CAM_OFFSET_X,
 l_B = config.TETHER_PIVOT_OFFSET
 
 
-def get_payload_center_in_camera_frame(frame):
+def center_from_records(records):
     """
-    Finds the payload center in the camera frame
+    Payload board center and marker x-axis in the camera frame.
+
+    records is an iterable of (marker_id, rvec, tvec). This is the shared core
+    for both the offline CSV path and the live control-loop path, so the two
+    cannot drift apart.
     """
     center_estimates = []
     mC_estimates = []
 
-    # separate the markers detected in each frame
-    markers_detected = frame.dropna(subset=["marker_id"]).itertuples()
-    for marker in markers_detected:
-        # get the rotation matrix
-        T_CM, _ = cv2.Rodrigues(np.array([marker.rx, marker.ry, marker.rz]))
+    for marker_id, rvec, tvec in records:
+        # rotation matrix from the marker's rodrigues vector
+        T_CM, _ = cv2.Rodrigues(np.asarray(rvec, dtype=float).reshape(3))
 
         # position
-        tC = np.array([marker.x, marker.y, marker.z])
+        tC = np.asarray(tvec, dtype=float).reshape(3)
 
         # marker x axis
         mC = T_CM[:, 0]
         mC_estimates.append(mC)
 
-        offset = MARKER_OFFSET[int(marker.marker_id)]
+        offset = MARKER_OFFSET[int(marker_id)]
 
-        center_estimate = tC + offset*mC
-        center_estimates.append(center_estimate)
+        center_estimates.append(tC + offset*mC)
 
     if not center_estimates:
         return None
@@ -52,6 +53,18 @@ def get_payload_center_in_camera_frame(frame):
     approx_mC = np.mean(mC_estimates, axis=0)
 
     return approx_center, approx_mC
+
+
+def get_payload_center_in_camera_frame(frame):
+    """
+    Finds the payload center in the camera frame (offline: a poses.csv frame)
+    """
+    records = [(marker.marker_id,
+                (marker.rx, marker.ry, marker.rz),
+                (marker.x, marker.y, marker.z))
+               for marker in frame.dropna(subset=["marker_id"]).itertuples()]
+
+    return center_from_records(records)
 
 
 def shift_origin(pC_ctr):
@@ -71,7 +84,7 @@ def payload_yaw(mC, T_IB):
     """
     mI = T_IB @ (T_BC @ np.asarray(mC, float))
 
-    z_psi_p = math.atan2(mI[1],mI[0])
+    z_psi_p = math.atan2(mI[1], mI[0])
 
     return z_psi_p
 
@@ -88,13 +101,10 @@ def alpha_from_q_I(q):
     return alpha_x, alpha_y
 
 
-def measurement(frame, T_IB):
+def _build_z(detection, T_IB):
     """
-    Returns the measurement needed for the EKF from a given frame and drone attitude
+    Assemble the EKF measurement vector from a (center, mC) detection
     """
-    detection = get_payload_center_in_camera_frame(frame)
-    if detection is None:
-        return None
     p_ctr_C, mC = detection
 
     b = shift_origin(p_ctr_C)
@@ -105,6 +115,36 @@ def measurement(frame, T_IB):
     z[IX_PSI_MEAS] = payload_yaw(mC, T_IB)
 
     return z
+
+
+def measurement(frame, T_IB):
+    """
+    Returns the measurement needed for the EKF from a given frame and drone attitude
+    """
+    detection = get_payload_center_in_camera_frame(frame)
+    if detection is None:
+        return None
+
+    return _build_z(detection, T_IB)
+
+
+def measurement_from_poses(poses, T_IB):
+    """
+    Live equivalent of measurement(), taking the recorder's pose dict.
+
+    poses is {marker_id: (rvec, tvec)} straight off MarkerPoseRecorder. Returns
+    None when nothing was detected this frame, which the EKF treats as
+    predict-only.
+    """
+    if not poses:
+        return None
+
+    detection = center_from_records(
+        [(mid, rvec, tvec) for mid, (rvec, tvec) in poses.items()])
+    if detection is None:
+        return None
+
+    return _build_z(detection, T_IB)
 
 
 def swing_angles(frame, T_IB):
@@ -129,7 +169,7 @@ def marker_bearings(frame):
     out = {}
     for marker in frame.dropna(subset=["marker_id"]).itertuples():
         out[int(marker.marker_id)] = shift_origin([marker.x,
-                                                    marker.y,
-                                                    marker.z])
+                                                   marker.y,
+                                                   marker.z])
 
     return out
