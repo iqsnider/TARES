@@ -23,7 +23,7 @@ if __name__ == "__main__":
     control_freq = config.CONTROL_FREQUENCY
 
     # live view config
-    preview_port = None# 8080 # live view; set None to disable
+    preview_port =  8080 # live view; set None to disable
     track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]   # only log these ids; None = all
 
     # add baud here if connected to real drone
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     # initialize drone logger
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_08072026/camera_test_{stamp}"
+    data_dir = f"data/test_08072026/camera_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -48,7 +48,7 @@ if __name__ == "__main__":
                              frame_stride=config.CAM_STRIDE,
                              marker_ids=track_marker_ids,
                              flight_logger=logger,
-                             preview_port=config.CAM_PREVIEW_PORT,
+                             preview_port=preview_port,
                              gain=config.CAM_GAIN,
                              exposure_abs=config.CAM_EXP_ABS)
     try:

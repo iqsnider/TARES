@@ -20,7 +20,7 @@ MASS_TETHER = 0.68 # [kg]
 MASS_PAYLOAD = 1.13 # [kg]
 DISC_DIAMETER = 0.3 # [m]
 DISC_WIDTH = 0.0025 # [m]
-TETHER_LEN = 8 # [m]
+TETHER_LEN = 10 # [m]
 
 TETHER_PIVOT_OFFSET = np.zeros(3) # [m] tether pivot offset from drone CG in body frame
 
@@ -37,7 +37,7 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 # settings
 CAM_GAIN = 1
-CAM_EXP_ABS = 5
+CAM_EXP_ABS = 8
 CAM_PREVIEW_PORT = None
 CAM_FPS = 48
 CAM_STRIDE = 1

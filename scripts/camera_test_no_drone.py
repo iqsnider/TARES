@@ -17,7 +17,7 @@ if __name__ == "__main__":
                         config.RIGHT_MARKER_ID]   # only log these ids; None = all
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_08072026/camera_test_{stamp}"
+    data_dir = f"data/test_08072026/camera_test_{stamp}"
     video_out = f"data/recording.avi"
     poses_out = f"data/poses.csv"
 

@@ -23,7 +23,7 @@ if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
     # connection = "udp:127.0.0.1:14550"
-    # takeoff_altitude = 15
+    takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     preview_port = None                  # live MJPEG view; None to disable
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_08072026/payload_step_test_{stamp}"
+    data_dir = f"data/test_08072026/payload_step_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -44,6 +44,7 @@ if __name__ == '__main__':
 
 
     # GUIDED mode is easiest for external commands
+    comms.set_guid_options(m, 0)
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
@@ -75,8 +76,8 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
-        startPointHoverTime = 10
-        endPointHoverTime = 10
+        startPointHoverTime = 15
+        endPointHoverTime = 15
 
         # ENU to ENU. payload_trajectory()
         # reference is where payload should be

@@ -84,7 +84,7 @@ class OuterLoopPayloadLQR:
     """
 
     def __init__(self,
-                 w_pos_xy=(1/1)**2,
+                 w_pos_xy=(1/2)**2,
                  w_pos_z=(1/1)**2,
                  tuning_const=1/1**2
                  ):

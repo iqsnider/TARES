@@ -1,0 +1,5 @@
+wall_time,fc_time_boot_ms,severity,text
+1786065017.6048,nan,4,ODID: lost transmitter
+1786065017.6049,nan,2,PreArm: Need Position Estimate
+1786065017.6049,nan,2,PreArm: OpenDroneID: Lost connection
+1786065019.7667,nan,4,ODID: lost transmitter
