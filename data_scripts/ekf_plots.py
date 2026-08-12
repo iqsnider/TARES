@@ -34,6 +34,14 @@ CALIB_FILE = (Path(__file__).resolve().parents[1] /
               "src/payload_tracking/camera_calibration/calibration.json")
 
 BGR_EST = (60, 255, 80)
+BGR_REF = (60, 60, 255)
+
+# A point the lens never saw is an extrapolation of the distortion polynomial,
+# which folds far-off-axis points back into the picture. The calibration only
+# reaches tan ~0.83 at the frame corner, so the reference is cut a little
+# beyond that: enough for the line to leave the frame, not enough to come back.
+MAX_TAN = 1.2
+MIN_DEPTH_M = 0.1
 
 
 def direct_measurement(frames, inp, offset):
@@ -356,14 +364,120 @@ def _label(frame, c, lines, gap=14, scale=1.15, thick=3):
         cv2.putText(frame, text, at, font, scale, BGR_EST, thick, cv2.LINE_AA)
 
 
+def logged_records(session):
+    """The onboard EKF's own output, per camera frame, shaped like `run_full`.
+
+    Nothing is re-estimated here: the states in the log are what the aircraft
+    actually flew on, so an overlay built from them shows the estimate the
+    controller had, not a better one reconstructed afterwards. The log is
+    resampled onto the camera's frame times, which is all the overlay needs.
+
+    No covariance is logged, so these records carry `P=None` and the overlay
+    draws the estimate without its uncertainty ellipse. Payload yaw is not
+    logged either; it is left at zero, and nothing the overlay draws uses it.
+    """
+    fl = session.fl
+    t = fl.cur_time.to_numpy()
+    frames = session.poses.groupby("frame").time_s.first()
+
+    t_cam = frames.to_numpy(float)
+    t_flight = t_cam - session.pose_offset
+    keep = (t_flight >= t[0]) & (t_flight <= t[-1])
+
+    def at(col):
+        return np.interp(t_flight[keep], t, fl[col].to_numpy(float))
+
+    xi = np.column_stack([at(c) for c in catalog.LOGGED_STATE_COLS] +
+                         [np.zeros(keep.sum())])
+    phi, theta, psi = (at("drone_roll"), at("drone_pitch"), at("drone_yaw"))
+
+    return [dict(frame=int(f), t_cam=tc, t_flight=tf, n=0,
+                 xi=xi[i], P=None, T_IB=ekfm.T_IB_fn(phi[i], theta[i], psi[i]))
+            for i, (f, tc, tf) in enumerate(zip(frames.index[keep],
+                                                t_cam[keep], t_flight[keep]))]
+
+
+def project_enu(P_I, p_drone, T_IB, filt, K, D):
+    """Pixel coordinates of ENU points `P_I` seen from the camera at one frame.
+
+    The same chain `EKF.estimate_to_px_coords` walks, written for an arbitrary
+    inertial point instead of a state estimate: into the body frame about the
+    drone, across the camera lever arm, into the camera frame, through the
+    lens. Rows that fall behind the camera or outside the calibrated cone come
+    back NaN rather than somewhere wrong.
+    """
+    p_C = ((np.atleast_2d(P_I) - p_drone) @ T_IB - filt.t_BC_B) @ filt.T_CB.T
+    ok = p_C[:, 2] > MIN_DEPTH_M
+    ok &= np.hypot(p_C[:, 0], p_C[:, 1]) < MAX_TAN*np.abs(p_C[:, 2])
+
+    uv = np.full((len(p_C), 2), np.nan)
+    if ok.any():
+        px, _ = cv2.projectPoints(p_C[ok].reshape(-1, 1, 3), np.zeros(3),
+                                  np.zeros(3), K, D)
+        uv[ok] = px.reshape(-1, 2)
+    return uv
+
+
+def _runs(uv):
+    """The drawable stretches of a projected path: pixels, split at the gaps.
+
+    A path that leaves the camera's view and comes back must not be joined
+    across the part that was never seen, so it is drawn as several polylines.
+    """
+    idx = np.flatnonzero(np.isfinite(uv[:, 0]))
+    if idx.size == 0:
+        return []
+    parts = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    return [np.clip(uv[p], -1e4, 1e4).round().astype(np.int32)
+            for p in parts if p.size > 1]
+
+
+def reference_pixels(session, records, filt, K, D, stride=5):
+    """{frame: (path stretches, the point being tracked right now)}.
+
+    The reference is a track through the world, so it is drawn as one: the
+    whole thing projected into every frame, with the sample the controller was
+    chasing at that instant marked on it. Both move about the picture as the
+    drone flies, and where the payload sits against them is the tracking error
+    the camera can actually show. Empty when the run flew no reference.
+    """
+    ref = flown_reference(session.fl)
+    if ref is None:
+        return {}
+    _, ref_xyz = ref
+
+    fl = session.fl
+    t = fl.cur_time.to_numpy()
+    drone = fl[["drone_px_meas", "drone_py_meas", "drone_pz_meas"]].to_numpy(float)
+    # the whole path is redrawn every frame, so it is thinned first; the log
+    # runs at 50 Hz and the reference crawls, well under a pixel per sample
+    path = ref_xyz[::stride]
+
+    out = {}
+    for r in records:
+        p_drone = np.array([np.interp(r["t_flight"], t, drone[:, k])
+                            for k in range(3)])
+        here = np.array([np.interp(r["t_flight"], t, ref_xyz[:, k])
+                         for k in range(3)])
+        uv = project_enu(np.vstack([path, here]), p_drone, r["T_IB"],
+                         filt, K, D)
+        out[r["frame"]] = (_runs(uv[:-1]), uv[-1])
+    return out
+
+
 def overlay_video(session, records, save=None, n_sigma=2):
     """Redraw the recording with the EKF payload estimate on each frame.
 
     A green dot marks where the filter believes the payload is and the shaded
     ellipse around it is its `n_sigma` position uncertainty, both projected
     into the camera by `EKF.estimate_to_px_coords`. The swing velocity is
-    written beside it. Frames the filter never reached are copied through
-    untouched.
+    written beside it. The reference the run was flying is drawn in red -- the
+    whole track as a line, the sample being chased right now as a dot on it --
+    so the estimate can be read against what it was supposed to be. Frames the
+    filter never reached are copied through untouched.
+
+    Records with `P=None` -- the states read back out of a flight log, which
+    carries no covariance -- get the dot without the ellipse.
     """
     src = find_recording(session)
     if src is None:
@@ -385,27 +499,44 @@ def overlay_video(session, records, save=None, n_sigma=2):
     filt = make_ekf(0, 0, 0, 0, 0, 0)
     drawn = {}
     for r in records:
+        P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM)) if r["P"] is None \
+            else r["P"]
         center, axes, angle = filt.estimate_to_px_coords(
-            r["xi"], r["P"], r["T_IB"], K, D, n_sigma)
+            r["xi"], P, r["T_IB"], K, D, n_sigma)
+        if r["P"] is None:
+            axes = None
         # a payload swung out of the camera's half-space projects nowhere
-        if np.isfinite(center).all() and np.isfinite(axes).all():
+        if np.isfinite(center).all() and (axes is None or
+                                          np.isfinite(axes).all()):
             drawn[r["frame"]] = (center, axes, angle,
                                  filt.estimate_to_swing_velocity(r["xi"]))
+    ref = reference_pixels(session, records, filt, K, D)
 
     i = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
+        # under the estimate: where the payload is beats where it should be
+        line = ref.get(i)
+        if line is not None:
+            runs, here = line
+            cv2.polylines(frame, runs, False, BGR_REF, 2, cv2.LINE_AA)
+            if np.isfinite(here).all():
+                c = tuple(np.clip(here, -1e4, 1e4).round().astype(int))
+                cv2.circle(frame, c, 10, BGR_REF, -1, cv2.LINE_AA)
+                cv2.circle(frame, c, 10, (255, 255, 255), 2, cv2.LINE_AA)
+
         hit = drawn.get(i)
         if hit is not None:
             center, axes, angle, (v_x, v_y) = hit
             c = tuple(np.round(center).astype(int))
-            ax = tuple(np.maximum(np.round(axes).astype(int), 1))
-            shade = frame.copy()
-            cv2.ellipse(shade, c, ax, angle, 0, 360, BGR_EST, -1)
-            cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
-            cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
+            if axes is not None:
+                ax = tuple(np.maximum(np.round(axes).astype(int), 1))
+                shade = frame.copy()
+                cv2.ellipse(shade, c, ax, angle, 0, 360, BGR_EST, -1)
+                cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
+                cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
 
             # the dot stays smaller than the band it sits in; at this range a
             # 2-sigma ellipse is only about ten pixels across

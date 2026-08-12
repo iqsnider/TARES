@@ -6,7 +6,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 import catalog
-from sim.plotting import configure_plot_style
+import Prm.config as config
+from sim.plotting import configure_plot_style, C_PAYLOAD, C_REF
 
 configure_plot_style()   # shared serif / Computer Modern theme
 
@@ -83,6 +84,42 @@ def measured_accel_enu(df, g=G):
 
 
 
+def _has(df, *cols):
+    """Whether every one of `cols` is in the log and carries data.
+
+    The logger writes both reference sets into every row and fills in only the
+    one the run was following, so on a payload run the drone reference columns
+    are all NaN. Drawing them puts an entry in the legend for a line that is
+    not there, which reads as a reference the flight ignored.
+    """
+    return all(c in df and df[c].notna().any() for c in cols)
+
+
+def payload_enu(df):
+    """Payload position and velocity in ENU from the states the aircraft logged.
+
+    Nothing is estimated here. The onboard EKF wrote its swing state into
+    every row of the log, and the controller turned that into a payload
+    position with the same small-angle tether model it flew on -- the payload
+    hangs a tether below the drone, displaced by the swing angles:
+
+        p_payload = p_drone + L*[alpha_x, alpha_y, -1]
+        v_payload = v_drone + L*[alphadot_x, alphadot_y, 0]
+
+    which is `dynamics.tether_equilibrium_state` read backwards. So these are
+    the payload states the run was actually closed around, not a
+    reconstruction of them.
+    """
+    L = config.TETHER_LEN
+    p = np.c_[df["drone_px_meas"] + L*df["payload_alpha_x"],
+              df["drone_py_meas"] + L*df["payload_alpha_y"],
+              df["drone_pz_meas"] - L]
+    v = np.c_[df["drone_vx_meas"] + L*df["payload_alphadot_x"],
+              df["drone_vy_meas"] + L*df["payload_alphadot_y"],
+              df["drone_vz_meas"]]
+    return p, v
+
+
 def _mode_runs(df):
     """
     Yield (start_idx, end_idx_inclusive, mode) for contiguous echoed_mode runs
@@ -96,6 +133,21 @@ def _mode_runs(df):
             j += 1
         yield i, j, em[i]
         i = j + 1
+
+
+def _mode_path(ax, df, *XYZ, name="drone", lw=1.8):
+    """Draw a track split into its flight-mode runs, one colour each.
+
+    Two or three coordinate arrays, so the same call serves the plan view and
+    the 3-D one.
+    """
+    seen = set()
+    for i, j, mode in _mode_runs(df):
+        color = MODE_SHADING.get(mode, ("0.7", 0))[0]   # neutral gray if unknown
+        sl = slice(i, min(j + 2, len(df)))              # +1 pt to connect segments
+        lbl = f"{name} ({mode})" if mode not in seen else None
+        ax.plot(*(A[sl] for A in XYZ), color=color, lw=lw, label=lbl)
+        seen.add(mode)
 
 
 def _shade_modes(ax, df, label=True):
@@ -167,7 +219,7 @@ def position_plot(df, t_takeover, save=None):
 
         line, = ax.plot(t, df[col], label=f"{comp} meas")
 
-        if ref in df:
+        if _has(df, ref):
             ax.plot(t, df[ref], ls="--", lw=1, color=line.get_color(),
                     alpha=0.6, label=f"{comp} ref")
 
@@ -198,12 +250,76 @@ def velocity_plot(df, t_takeover, save=None):
 
         line, = ax.plot(t, df[col], label=f"{comp} meas")
 
-        if ref in df:
+        if _has(df, ref):
             ax.plot(t, df[ref], ls="--", lw=1, color=line.get_color(),
                     alpha=0.6, label=f"{comp} ref")
 
     ax.set_xlabel("Time [s]"); ax.set_ylabel("Velocity ENU [m/s]")
     ax.set_title("Drone Velocity vs Time")
+
+    ax.grid(True, alpha=0.3)
+    _shade_modes(ax, df)
+    ax.legend(fontsize=8, ncol=3, loc="best")
+
+    fig.tight_layout()
+
+    if save:
+        fig.savefig(save, dpi=110)
+
+
+def payload_position_plot(df, t_takeover, save=None):
+    """
+    Plot 3.1: Payload position vs time, against the reference it was tracking
+    """
+    t = df["cur_time"].to_numpy()
+    p, _ = payload_enu(df)
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+
+    for k, (comp, ref) in enumerate([("E", "payload_px_ref"),
+                                     ("N", "payload_py_ref"),
+                                     ("U", "payload_pz_ref")]):
+
+        line, = ax.plot(t, p[:, k], label=f"{comp} est")
+
+        if _has(df, ref):
+            ax.plot(t, df[ref], ls="--", lw=1, color=line.get_color(),
+                    alpha=0.6, label=f"{comp} ref")
+
+    ax.set_xlabel("Time [s]"); ax.set_ylabel("Position ENU [m]")
+    ax.set_title("Payload Position vs Time (onboard EKF)")
+
+    ax.grid(True, alpha=0.3)
+    _shade_modes(ax, df)
+    ax.legend(fontsize=8, ncol=3, loc="best")
+
+    fig.tight_layout()
+
+    if save:
+        fig.savefig(save, dpi=110)
+
+
+def payload_velocity_plot(df, t_takeover, save=None):
+    """
+    Plot 3.2: Payload velocity vs time, against the reference it was tracking
+    """
+    t = df["cur_time"].to_numpy()
+    _, v = payload_enu(df)
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+
+    for k, (comp, ref) in enumerate([("vE", "payload_vx_ref"),
+                                     ("vN", "payload_vy_ref"),
+                                     ("vU", "payload_vz_ref")]):
+
+        line, = ax.plot(t, v[:, k], label=f"{comp} est")
+
+        if _has(df, ref):
+            ax.plot(t, df[ref], ls="--", lw=1, color=line.get_color(),
+                    alpha=0.6, label=f"{comp} ref")
+
+    ax.set_xlabel("Time [s]"); ax.set_ylabel("Velocity ENU [m/s]")
+    ax.set_title("Payload Velocity vs Time (onboard EKF)")
 
     ax.grid(True, alpha=0.3)
     _shade_modes(ax, df)
@@ -330,15 +446,9 @@ def trajectory_plot(df, save=None):
 
     fig, ax = plt.subplots(figsize=(7.5, 7.5))
 
-    seen = set()
-    for i, j, mode in _mode_runs(df):
-        color = MODE_SHADING.get(mode, ("0.7", 0))[0] # neutral gray if unknown
-        sl = slice(i, min(j + 2, len(df))) # +1 pt to connect segments
-        lbl = f"drone ({mode})" if mode not in seen else None
-        ax.plot(E[sl], N[sl], color=color, lw=1.8, label=lbl)
-        seen.add(mode)
+    _mode_path(ax, df, E, N)
 
-    if "drone_px_ref" in df and "drone_py_ref" in df:
+    if _has(df, "drone_px_ref", "drone_py_ref"):
         ax.plot(df["drone_px_ref"], df["drone_py_ref"], "k--", lw=1.5,
                 label="reference")
 
@@ -357,7 +467,41 @@ def trajectory_plot(df, save=None):
     if save:
         fig.savefig(save, dpi=110)
 
- 
+
+def payload_trajectory_plot(df, save=None):
+    """
+    Plot 7.1: East-North trajectory of the payload, colored by flight mode,
+    with the payload reference. Counterpart of trajectory_plot -- on a payload
+    run this is the plan view that matters, because the thing being put
+    somewhere is the payload and the drone only goes where it must to do it.
+    """
+    p, _ = payload_enu(df)
+    E, N = p[:, 0], p[:, 1]
+
+    fig, ax = plt.subplots(figsize=(7.5, 7.5))
+
+    _mode_path(ax, df, E, N, name="payload")
+
+    if _has(df, "payload_px_ref", "payload_py_ref"):
+        ax.plot(df["payload_px_ref"], df["payload_py_ref"], "k--", lw=1.5,
+                label="reference")
+
+    ax.scatter([E[0]], [N[0]], c="red", zorder=5, s=45, label="start")
+    ax.scatter([0], [0], c="black", marker="x", s=70, zorder=5,
+               label="local origin")
+
+    ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]")
+    ax.set_title("Payload horizontal trajectory (ENU), colored by mode")
+
+    ax.axis("equal"); ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="best")
+
+    fig.tight_layout()
+
+    if save:
+        fig.savefig(save, dpi=110)
+
+
 def _set_equal_3d(ax, X, Y, Z):
     """Equal data aspect for a 3D axes (matplotlib has no axis('equal') in 3D)."""
     xr, yr, zr = np.ptp(X), np.ptp(Y), np.ptp(Z)
@@ -373,31 +517,44 @@ def trajectory_plot_3d(df, save=None):
     """
     3D East-North-Up trajectory of the drone, colored by flight mode, with the
     reference trajectory overlaid. 3D counterpart of trajectory_plot.
+
+    A run that flew the payload EKF onboard gets the payload hanging below the
+    drone as well, with the reference it was tracking: on those runs the drone
+    is the means and the payload is the point, so both belong in the box.
     """
     E = df["drone_px_meas"].to_numpy()
     N = df["drone_py_meas"].to_numpy()
     U = df["drone_pz_meas"].to_numpy()
     fig = plt.figure(figsize=(8.5, 8))
     ax = fig.add_subplot(111, projection="3d")
- 
-    seen = set()
-    for i, j, mode in _mode_runs(df):
-        color = MODE_SHADING.get(mode, ("0.7", 0))[0]     # neutral gray if unknown
-        sl = slice(i, min(j + 2, len(df)))                # +1 pt to connect segments
-        lbl = f"drone ({mode})" if mode not in seen else None
-        ax.plot(E[sl], N[sl], U[sl], color=color, lw=1.8, label=lbl)
-        seen.add(mode)
- 
-    if {"drone_px_ref", "drone_py_ref", "drone_pz_ref"} <= set(df.columns):
+
+    _mode_path(ax, df, E, N, U)
+
+    if _has(df, "drone_px_ref", "drone_py_ref", "drone_pz_ref"):
         ax.plot(df["drone_px_ref"], df["drone_py_ref"], df["drone_pz_ref"],
                 "k--", lw=1.5, label="reference")
- 
+
+    box = [np.append(E, 0), np.append(N, 0), np.append(U, 0)]
+    if catalog.has_logged_states(df):
+        p, _ = payload_enu(df)
+        ax.plot(p[:, 0], p[:, 1], p[:, 2], color=C_PAYLOAD, lw=1.6,
+                label="payload (onboard EKF)")
+        if _has(df, "payload_px_ref", "payload_py_ref", "payload_pz_ref"):
+            # over the payload track, not under it: the reference runs right
+            # where the payload does, which is the comparison being drawn
+            ax.plot(df["payload_px_ref"], df["payload_py_ref"],
+                    df["payload_pz_ref"], color=C_REF, lw=1.5,
+                    linestyle=(0, (5, 4)), zorder=5, label="payload reference")
+        # the payload hangs a tether below the drone, so the box has to reach
+        # down to it or the whole track is cropped off the bottom
+        box = [np.append(a, p[:, k]) for k, a in enumerate(box)]
+
     ax.scatter([E[0]], [N[0]], [U[0]], c="red", s=45, label="start")
     ax.scatter([0], [0], [0], c="black", marker="x", s=70, label="local origin")
- 
+
     ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.set_zlabel("Up [m]")
     ax.set_title("3D trajectory (ENU), colored by mode")
-    _set_equal_3d(ax, np.append(E, 0), np.append(N, 0), np.append(U, 0))
+    _set_equal_3d(ax, *box)
     ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     if save:
@@ -428,6 +585,15 @@ def plot_suite(df, target_hz=50, save=None, stem="flight"):
     # servo_plot(df, t_takeover, save=out("servo"))
     trajectory_plot(df, save=out("trajectory"))
     trajectory_plot_3d(df, save=out("trajectory_3d"))
+
+    # only runs that flew the filter onboard have a payload to draw; on the
+    # rest the columns are there but empty, and there is nothing to say
+    if catalog.has_logged_states(df):
+        payload_position_plot(df, t_takeover, save=out("payload_position"))
+        payload_velocity_plot(df, t_takeover, save=out("payload_velocity"))
+        payload_trajectory_plot(df, save=out("payload_trajectory"))
+    else:
+        print("No onboard payload states in this log; payload plots skipped.")
 
 
 if __name__ == "__main__":

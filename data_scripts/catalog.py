@@ -241,6 +241,22 @@ class Session:
         return out
 
 
+LOGGED_STATE_COLS = ("payload_alpha_x", "payload_alpha_y",
+                     "payload_alphadot_x", "payload_alphadot_y")
+
+
+def has_logged_states(d):
+    """Whether the flight computer ran the payload EKF and logged its output.
+
+    Runs from Aug 2026 on fly the filter in the loop and write the swing state
+    it was steering on into every row; earlier logs carry the columns but
+    leave them at zero, because nothing was filling them. Read off the data
+    rather than configured, the same way `flown_reference` is.
+    """
+    return (set(LOGGED_STATE_COLS) <= set(d.columns)
+            and bool(d[list(LOGGED_STATE_COLS)].abs().to_numpy().max() > 0))
+
+
 def flown_reference(d):
     """Which reference the flight actually tracked: 'payload', 'drone' or '?'.
 

@@ -69,11 +69,28 @@ def kind_ekf(s, save, cam=False):
     ekf_plots.plot_timeseries(r["R"], r["meas_df"],
                               save=_out(save, f"{s.id}_ekf_timeseries.png"))
     if cam:
-        ekf_plots.overlay_video(s, r["records"],
-                                save=_out(save, f"{s.id}_ekf_overlay.avi"))
+        kind_overlay(s, save)
 
 
-KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf}
+def kind_overlay(s, save, cam=False):
+    """The recording with the payload estimate and the flown reference on it.
+
+    Where the aircraft flew the filter itself, its logged states are what goes
+    on the picture: that is the estimate the controller actually steered on,
+    and re-running the filter offline would draw a different one. Only runs
+    that predate the onboard filter are estimated here.
+    """
+    import ekf_plots
+    if catalog.has_logged_states(s.fl):
+        records = ekf_plots.logged_records(s)
+    else:
+        records = ekf_plots.analyse(s, verbose=False)["records"]
+    ekf_plots.overlay_video(s, records,
+                            save=_out(save, f"{s.id}_ekf_overlay.avi"))
+
+
+KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf,
+         "overlay": kind_overlay}
 
 
 # ----------------------------------------------------------------------------
