@@ -58,7 +58,7 @@ class EKF:
                  q_yaw=(0.3)**2, # process noise on psi_p
                  sigma_xy=math.radians(0.5), # bearing noise [rad]
                  sigma_yaw=math.radians(30), # payload yaw noise [rad]
-                 sigma_alpha_0=math.radians(2), # initial swing angle 1-sigma [rad]
+                 sigma_alpha_0=math.radians(30), # initial swing angle 1-sigma [rad]
                  sigma_rate_0=math.radians(30), # initial swing rate 1-sigma [rad/s]
                  sigma_psi_p_0=math.radians(15)): # initial payload yaw 1-sigma [rad]
 

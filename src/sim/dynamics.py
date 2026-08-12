@@ -77,15 +77,16 @@ class OuterLoopLQR:
         return a_ref - self.K @ e
 
 
-
 class OuterLoopPayloadLQR:
     """
-    4x10 gain outputs acceleration
+    3x10 gain outputs acceleration
     """
 
     def __init__(self,
-                 w_pos_xy=(1/2)**2,
+                 w_pos_xy=(1/1)**2,
                  w_pos_z=(1/1)**2,
+                 w_int_xy=(1/1)**2,
+                 w_int_z=(1/1)**2,
                  tuning_const=1/1**2
                  ):
         L = config.TETHER_LEN
@@ -145,6 +146,93 @@ class OuterLoopPayloadLQR:
 
         return a, b
 
+    @staticmethod
+    def _lqr(A, B, Q, R):
+        """Returns LQR gain"""
+        P = solve_continuous_are(A, B, Q, R)
+        return np.linalg.inv(R) @ B.T @ P
+
+
+class OuterLoopPayloadLQI:
+    """
+    3x16 state gain + 3x3 integral gain, outputs acceleration
+    """
+    OUTER_STATES = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
+
+    def __init__(self,
+                 w_pos_xy=(1/1)**2,
+                 w_pos_z=(1/1)**2,
+                 w_int_xy=(1/1)**2,
+                 w_int_z=(1/1)**2,
+                 tuning_const=1/1**2
+                 ):
+        L = config.TETHER_LEN
+        A, B = self._build_system()
+        C = np.zeros((3, 10))
+        C[0, 0] = 1
+        C[0, 6] = L
+        C[1, 1] = 1
+        C[1, 7] = L
+        C[2, 2] = 1
+
+        # augment: xI_dot = C @ x
+        Abar = np.zeros((13, 13))
+        Abar[:10, :10] = A
+        Abar[10:, :10] = C
+        Bbar = np.zeros((13, 3))
+        Bbar[:10, :] = B
+
+        W = np.diag([w_pos_xy, w_pos_xy, w_pos_z])
+        Wi = np.diag([w_int_xy, w_int_xy, w_int_z])
+        Q = np.zeros((13, 13))
+        Q[:10, :10] = C.T@W@C
+        Q[10:, 10:] = Wi
+        R = tuning_const*np.diag([1, 1, 1])
+
+        Kbar = self._lqr(Abar, Bbar, Q, R)  # (3, 13)
+        self.C = C
+        self.K = np.zeros((3, 16))
+        self.K[:, self.OUTER_STATES] = Kbar[:, :10]
+        self.Ki = Kbar[:, 10:]              # (3, 3)
+        self.xi = np.zeros(3)
+
+    def compute_u(self, state_err):
+        dt = 1/config.CONTROL_FREQUENCY
+        y_err = self.C @ state_err[self.OUTER_STATES]
+        self.xi += y_err * dt
+        return -self.K @ state_err - self.Ki @ self.xi
+
+    def reset(self):
+        self.xi[:] = 0
+
+    @staticmethod
+    def _build_system():
+        """
+        linearized 10-state about hover.
+        state: [s1 s2 s3  v1 v2 v3  a1 a2  a1d a2d]
+        """
+        L = config.TETHER_LEN
+        g = config.GRAVITY
+        a = np.zeros((10, 10))
+        b = np.zeros((10, 3))
+        # position
+        a[0, 3] = 1
+        a[1, 4] = 1
+        a[2, 5] = 1
+        # translational kinematics
+        b[3, 0] = 1
+        b[4, 1] = 1
+        b[5, 2] = 1
+        # pendulum kinematics and dynamics
+        a[6, 8] = 1
+        a[7, 9] = 1
+        a[8, 6] = -g/L
+        a[9, 7] = -g/L
+
+        b[8, 0] = -1/L
+        b[9, 1] = -1/L
+
+        return a, b
 
     @staticmethod
     def _lqr(A, B, Q, R):

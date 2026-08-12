@@ -56,6 +56,21 @@ def initial_state(pl_ref, pert=None):
         x0 = x0 + pert
     return x0
 
+
+def wind(acc=np.array([0, 1, 0]), transform=None):
+    """
+    Inputs an ENU vector of the wind acceleration in the inertial frame and accepts a transform for putting the wind in another reference frame.
+    """
+    acc = np.asarray(acc)
+
+    if transform is None:
+        return acc
+
+    transformed_acc = transform @ acc
+
+    return transformed_acc
+
+
 def synthetic_measurement(x, T_IB, sigma_xy, sigma_yaw, rng, psi_p=0):
     """
     The bearing a camera would see, from truth, plus noise
@@ -68,14 +83,14 @@ def synthetic_measurement(x, T_IB, sigma_xy, sigma_yaw, rng, psi_p=0):
     b = config.CAM_R.T @ T_IB.T @ q_I
 
     z = np.array([b[0], b[1], psi_p]) + np.array([rng.normal(0, sigma_xy),
-                                                rng.normal(0, sigma_xy),
+                                                  rng.normal(0, sigma_xy),
                                                  rng.normal(0, sigma_yaw)])
 
     return z
 
 
 def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_target='payload',
-             cam_every=config.CONTROL_FREQUENCY // 30):
+             cam_every=config.CONTROL_FREQUENCY // 30, wind_acc=None):
 
     if ref_target not in REF_TARGETS:
         raise ValueError(f'ref_target must be one of {REF_TARGETS}')
@@ -117,6 +132,11 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
 
         u, e = architecture(x_hat, t, pl_ref)
         xdot = nonlinear_ode(x, u)
+        if wind_acc is not None:
+            if i == 2000:
+                wind_acc = [elem*2 for elem in wind_acc]
+
+            xdot[3:6] += wind(wind_acc, T_IB)
         a_prev = xdot[3:6]
 
         u_log[:, i] = u
@@ -135,7 +155,6 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
     return ts, X, P_ref, err_log, u_log, xi_log, var_log
 
 
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
 
@@ -148,11 +167,12 @@ def main():
                     help='which body the reference trajectory is drawn for')
 
     ap.add_argument('--ekf', action="store_true")
+    ap.add_argument('--wind', default=[1, 0, 0])
 
     args = ap.parse_args()
 
-    startPointHoverTime = 10
-    endPointHoverTime = 10
+    startPointHoverTime = 30
+    endPointHoverTime = 30
     architecture = control_law.build(args.arch)
 
     ref = mission.ReferenceTrajectory(p_start=np.array([0, 0, 15]),
@@ -161,7 +181,8 @@ def main():
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)
 
-    ts, X, P_ref, err_log, u_log, xi_log, var_log = simulate(architecture, ref,ekf=args.ekf, ref_target=args.ref_target)
+    ts, X, P_ref, err_log, u_log, xi_log, var_log = simulate(
+        architecture, ref, ekf=args.ekf, ref_target=args.ref_target, wind_acc=args.wind)
 
     print(f'{args.arch} ({args.ref_target} reference): {len(ts)} samples '
           f'over {ts[-1]:.1f} s')
