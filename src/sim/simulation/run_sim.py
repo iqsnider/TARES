@@ -187,7 +187,7 @@ def main():
                     help='which body the reference trajectory is drawn for')
 
     ap.add_argument('--ekf', action="store_true")
-    ap.add_argument('--wind', default={35 : np.array([3, 0, 0]), 50 : np.array([0,0,0])})
+    ap.add_argument('--wind', default={35 : np.array([3, 0, 0]), 70 : np.array([0,0,0])})
 
     args = ap.parse_args()
 
@@ -196,7 +196,7 @@ def main():
     architecture = control_law.build(args.arch)
 
     ref = mission.ReferenceTrajectory(p_start=np.array([0, 0, 15]),
-                                      p_end=np.array([0, -30, 15]),
+                                      p_end=np.array([0, -80, 15]),
                                       speed=1,
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)

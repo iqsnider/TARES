@@ -387,7 +387,7 @@ $
 #let wrap = math.op("wrap")
 
 #block(
-  stroke: 1pt + purple, 
+  stroke: 1pt + darkgreen, 
   radius: 4pt, 
   inset: 10pt,
   fill: gray.lighten(80%)
@@ -436,3 +436,88 @@ xihat_k^+ = xihat_k^-, quad P_k^+ = P_k^-
 $
 
 ]
+
+#block(
+  stroke: 1pt + purple, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
+= Control
+=== State-Space
+  $ dot(x) = A x + B u $
+where,
+  $ x = vec(s_1^I, s_2^I, s_3^I, v_1^I, v_2^I, v_3^I, alpha_x^I, alpha_y^I, dot(alpha)_x^I, dot(alpha)_y^I), quad u = vec(a_1^I, a_2^I, a_3^I) $
+
+  $ "drone states" cases(dot(s)_1^I = v_1^I,
+  dot(s)_2^I = v_2^I ,
+  dot(s)_3^I = v_3^I ,
+  dot(v)_1^I = a_1^I ,
+  dot(v)_2^I = a_2^I ,
+  dot(v)_3^I = 0) $
+
+  $ "payload states" cases(dot(alpha)_x^I = dot(alpha)_x^I ,
+  dot(alpha)_y^I = dot(alpha)_y^I ,
+  dot.double(alpha)_x^I = -g/L dot(alpha)_x^I - 1/L a_1^I ,
+  dot.double(alpha)_y^I = -g/L dot(alpha)_y^I - 1/L a_2^I) $
+
+  $ arrow.r.double A, B $
+
+=== Equilibrium
+
+  $ x^* = vec([s_(P L) (t)]^I + vec(0,0,L), [v_(P L)]^I, 0 ) $
+
+
+]
+
+#block(
+  stroke: 1pt + purple, 
+  radius: 4pt, 
+  inset: 10pt,
+  fill: gray.lighten(80%)
+)[
+== LQI Controller
+
+=== Control Law
+  $ u = -mat(K_x, K_I) vec(e, integral e)\ e = x - x^* $
+
+  $ y_"error" = C e $
+  $ integral e[k + 1] = integral e[k] + y_"error" Delta t $
+
+=== Output
+  $ y = C x $
+
+  $ y = [s_(P L)]^I\
+  = vec(s_1^I - L alpha_x^I, s_2^I - L alpha_y^I, s_3^I - L) $
+
+  $ arrow.r.double C $
+
+=== Gain matrix
+  $ overline(K) = mat(K_x, K_I) $
+
+=== Augmented State-space
+
+  $ dot(z) = overline(A) z + overline(B) u $
+  $ z = vec(x, integral [s_(P L)]^I ) $
+  $ arrow.r.double overline(A), overline(B) $
+
+=== Cost minimization
+
+Solve for the optimal $overline(K)$,
+
+  $ J = integral_0^oo ( vec(e, integral e)^top overline(Q) vec(e, integral e)  + u^top R u ) dif t $
+
+State weighting matrix,
+  $ overline(Q) = mat(C^top W C, 0_(10 times 3); 0_(3 times 10), W_"int") in RR^(13 times 13) $
+  $ W = mat(w_x,0,0;0,w_y,0;0,0,w_z) $
+  $ W_"int" = mat(w_("int",x),0,0;0,w_("int", y),0;0,0,w_("int",z)) $
+
+Control weighting matrix,
+  $ R = ("tuning const") times mat(1,0,0;0,1,0;0,0,1) $
+
+  $ overline(A)^top P + P overline(A) - P overline(B) R^(-1) overline(B)^top P + overline(Q) = 0 arrow.r.double P $
+  $ overline(K) = R^(-1) overline(B)^top P $
+
+]
+
+

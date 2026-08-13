@@ -35,6 +35,7 @@ CALIB_FILE = (Path(__file__).resolve().parents[1] /
 
 BGR_EST = (60, 255, 80)
 BGR_REF = (60, 60, 255)
+BGR_ERR = (255, 60, 0)
 
 # A point the lens never saw is an extrapolation of the distortion polynomial,
 # which folds far-off-axis points back into the picture. The calibration only
@@ -42,6 +43,11 @@ BGR_REF = (60, 60, 255)
 # beyond that: enough for the line to leave the frame, not enough to come back.
 MAX_TAN = 1.2
 MIN_DEPTH_M = 0.1
+
+# How far ahead the velocity arrow reaches: one second of travel at the
+# current swing velocity, which is a length on the ground rather than a gain
+# that has to be looked up to be read.
+LEAD_S = 1.0
 
 
 def direct_measurement(frames, inp, offset):
@@ -342,7 +348,7 @@ def _intrinsics():
             np.array(calib["dist"], dtype=float))
 
 
-def _label(frame, c, lines, gap=14, scale=1.15, thick=3):
+def _label(frame, c, lines, color=BGR_EST, gap=14, scale=1.15, thick=3):
     """Write `lines` up and to the right of the point at `c`.
 
     Nudged back inside the frame when the payload swings near an edge, so the
@@ -361,7 +367,7 @@ def _label(frame, c, lines, gap=14, scale=1.15, thick=3):
         at = (x, y + k*step)
         cv2.putText(frame, text, at, font, scale, (0, 0, 0), thick + 3,
                     cv2.LINE_AA)
-        cv2.putText(frame, text, at, font, scale, BGR_EST, thick, cv2.LINE_AA)
+        cv2.putText(frame, text, at, font, scale, color, thick, cv2.LINE_AA)
 
 
 def logged_records(session):
@@ -432,36 +438,90 @@ def _runs(uv):
             for p in parts if p.size > 1]
 
 
+def drone_states(fl, records):
+    """(position, velocity) in ENU at each record's flight time, Nx3 each.
+
+    The camera runs on its own clock and its own rate, so everything the
+    overlay needs off the flight log is resampled onto the frames once, here,
+    rather than a column at a time down in the drawing.
+    """
+    t = fl.cur_time.to_numpy()
+    at = [r["t_flight"] for r in records]
+
+    def cols(*names):
+        return np.column_stack([np.interp(at, t, fl[c].to_numpy(float))
+                                for c in names])
+
+    return (cols("drone_px_meas", "drone_py_meas", "drone_pz_meas"),
+            cols("drone_vx_meas", "drone_vy_meas", "drone_vz_meas"))
+
+
+def payload_enu(r, p_drone, filt):
+    """Where the filter puts the payload: a tether below the drone, leaned
+    over by the swing angles. The small-angle model the controller flew on."""
+    return p_drone + filt.L*np.array([r["xi"][ekfm.IX_ALPHA_X],
+                                      r["xi"][ekfm.IX_ALPHA_Y], -1])
+
+
+def velocity_tip_px(r, p_drone, v_drone, filt, K, D, lead_s=LEAD_S):
+    """Where the payload is headed, in pixels: the tip of the velocity arrow.
+
+    The velocity is the payload's over the ground, in ENU -- the drone's own
+    velocity plus what the swing adds to it:
+
+        v_I = v_drone + L*[alphadot_x, alphadot_y, 0]
+
+    which is the same quantity the payload velocity plot draws against the
+    reference. Note that this is not the motion the picture shows: the camera
+    travels with the drone, so a payload flying level with it at 1 m/s sits
+    still in frame while carrying a 1 m/s arrow.
+
+    The tip is the payload's own position carried `lead_s` along that velocity
+    and projected like any other point, so the arrow reads as a length rather
+    than an arbitrary gain: it spans one second of travel at the current
+    speed, foreshortening and lens distortion included. That is a scale, not a
+    prediction -- the tether is a 6.3 s pendulum, so a second of swing turns
+    through a sixth of a cycle and the payload never reaches the tip.
+    """
+    v_I = v_drone + filt.L*np.array([r["xi"][ekfm.IX_ALPHA_DOT_X],
+                                     r["xi"][ekfm.IX_ALPHA_DOT_Y], 0])
+    ahead = payload_enu(r, p_drone, filt) + lead_s*v_I
+    return project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
+
+
 def reference_pixels(session, records, filt, K, D, stride=5):
-    """{frame: (path stretches, the point being tracked right now)}.
+    """{frame: (path stretches, the point being tracked right now, error [m])}.
 
     The reference is a track through the world, so it is drawn as one: the
     whole thing projected into every frame, with the sample the controller was
     chasing at that instant marked on it. Both move about the picture as the
     drone flies, and where the payload sits against them is the tracking error
     the camera can actually show. Empty when the run flew no reference.
+
+    The error is the straight-line distance in ENU from that sample to where
+    the filter puts the payload, measured in the world rather than off the
+    picture: two points the same distance apart look closer together the
+    further from the lens axis they sit, so pixels would not be a length.
     """
     ref = flown_reference(session.fl)
     if ref is None:
         return {}
     _, ref_xyz = ref
 
-    fl = session.fl
-    t = fl.cur_time.to_numpy()
-    drone = fl[["drone_px_meas", "drone_py_meas", "drone_pz_meas"]].to_numpy(float)
+    t = session.fl.cur_time.to_numpy()
+    p_drone, _ = drone_states(session.fl, records)
     # the whole path is redrawn every frame, so it is thinned first; the log
     # runs at 50 Hz and the reference crawls, well under a pixel per sample
     path = ref_xyz[::stride]
 
     out = {}
-    for r in records:
-        p_drone = np.array([np.interp(r["t_flight"], t, drone[:, k])
-                            for k in range(3)])
-        here = np.array([np.interp(r["t_flight"], t, ref_xyz[:, k])
-                         for k in range(3)])
-        uv = project_enu(np.vstack([path, here]), p_drone, r["T_IB"],
+    for k, r in enumerate(records):
+        here = np.array([np.interp(r["t_flight"], t, ref_xyz[:, c])
+                         for c in range(3)])
+        uv = project_enu(np.vstack([path, here]), p_drone[k], r["T_IB"],
                          filt, K, D)
-        out[r["frame"]] = (_runs(uv[:-1]), uv[-1])
+        gap = np.linalg.norm(payload_enu(r, p_drone[k], filt) - here)
+        out[r["frame"]] = (_runs(uv[:-1]), uv[-1], float(gap))
     return out
 
 
@@ -470,11 +530,13 @@ def overlay_video(session, records, save=None, n_sigma=2):
 
     A green dot marks where the filter believes the payload is and the shaded
     ellipse around it is its `n_sigma` position uncertainty, both projected
-    into the camera by `EKF.estimate_to_px_coords`. The swing velocity is
-    written beside it. The reference the run was flying is drawn in red -- the
-    whole track as a line, the sample being chased right now as a dot on it --
-    so the estimate can be read against what it was supposed to be. Frames the
-    filter never reached are copied through untouched.
+    into the camera by `EKF.estimate_to_px_coords`. A green arrow off the dot
+    is the payload's ENU velocity, one second of travel long, drawn where that
+    second would take it. The reference the run was flying is drawn in
+    red -- the whole track as a line, the sample being chased now as a dot --
+    so the estimate can be read against what it was supposed to be. A blue
+    line closes the gap between the two, labelled with how far apart they are
+    in metres. Frames the filter never reached are copied through untouched.
 
     Records with `P=None` -- the states read back out of a flight log, which
     carries no covariance -- get the dot without the ellipse.
@@ -497,8 +559,9 @@ def overlay_video(session, records, save=None, n_sigma=2):
 
     K, D = _intrinsics()
     filt = make_ekf(0, 0, 0, 0, 0, 0)
+    p_drone, v_drone = drone_states(session.fl, records)
     drawn = {}
-    for r in records:
+    for k, r in enumerate(records):
         P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM)) if r["P"] is None \
             else r["P"]
         center, axes, angle = filt.estimate_to_px_coords(
@@ -509,7 +572,8 @@ def overlay_video(session, records, save=None, n_sigma=2):
         if np.isfinite(center).all() and (axes is None or
                                           np.isfinite(axes).all()):
             drawn[r["frame"]] = (center, axes, angle,
-                                 filt.estimate_to_swing_velocity(r["xi"]))
+                                 velocity_tip_px(r, p_drone[k], v_drone[k],
+                                                 filt, K, D))
     ref = reference_pixels(session, records, filt, K, D)
 
     i = 0
@@ -519,18 +583,27 @@ def overlay_video(session, records, save=None, n_sigma=2):
             break
         # under the estimate: where the payload is beats where it should be
         line = ref.get(i)
+        at_ref = None
         if line is not None:
-            runs, here = line
+            runs, here, err_m = line
             cv2.polylines(frame, runs, False, BGR_REF, 2, cv2.LINE_AA)
             if np.isfinite(here).all():
-                c = tuple(np.clip(here, -1e4, 1e4).round().astype(int))
-                cv2.circle(frame, c, 10, BGR_REF, -1, cv2.LINE_AA)
-                cv2.circle(frame, c, 10, (255, 255, 255), 2, cv2.LINE_AA)
+                at_ref = tuple(np.clip(here, -1e4, 1e4).round().astype(int))
+                cv2.circle(frame, at_ref, 10, BGR_REF, -1, cv2.LINE_AA)
+                cv2.circle(frame, at_ref, 10, (255, 255, 255), 2, cv2.LINE_AA)
 
         hit = drawn.get(i)
         if hit is not None:
-            center, axes, angle, (v_x, v_y) = hit
+            center, axes, angle, tip = hit
             c = tuple(np.round(center).astype(int))
+
+            # the gap the run is being judged on, drawn where it happens and
+            # labelled with the length it actually is
+            if at_ref is not None:
+                cv2.line(frame, at_ref, c, BGR_ERR, 2, cv2.LINE_AA)
+                mid = ((at_ref[0] + c[0])//2, (at_ref[1] + c[1])//2)
+                _label(frame, mid, (f"{err_m:.2f} m",), color=BGR_ERR)
+
             if axes is not None:
                 ax = tuple(np.maximum(np.round(axes).astype(int), 1))
                 shade = frame.copy()
@@ -538,11 +611,15 @@ def overlay_video(session, records, save=None, n_sigma=2):
                 cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
                 cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
 
+            if np.isfinite(tip).all():
+                cv2.arrowedLine(frame, c,
+                                tuple(np.clip(tip, -1e4, 1e4).round().astype(int)),
+                                BGR_EST, 2, cv2.LINE_AA, tipLength=0.2)
+
             # the dot stays smaller than the band it sits in; at this range a
             # 2-sigma ellipse is only about ten pixels across
             cv2.circle(frame, c, 4, BGR_EST, -1)
             cv2.circle(frame, c, 4, (255, 255, 255), 1)
-            _label(frame, c, (f"vE {v_x:+.2f} m/s", f"vN {v_y:+.2f} m/s"))
         writer.write(frame)
         i += 1
 
