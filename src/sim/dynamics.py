@@ -165,7 +165,7 @@ class OuterLoopPayloadLQI:
                  w_int_xy=(1/1)**2,
                  w_int_z=(1/1)**2,
                  tuning_const=1/1**2
-                 ):
+                 int):
         L = config.TETHER_LEN
         A, B = self._build_system()
         C = np.zeros((3, 10))
@@ -196,10 +196,23 @@ class OuterLoopPayloadLQI:
         self.Ki = Kbar[:, 10:]              # (3, 3)
         self.xi = np.zeros(3)
 
+        # make accessible for analysis
+        self.Abar = Abar
+        self.Bbar = Bbar
+        self.Kbar = Kbar
+        self.Q = Q
+        self.R = R
+
     def compute_u(self, state_err):
         dt = 1/config.CONTROL_FREQUENCY
+
         y_err = self.C @ state_err[self.OUTER_STATES]
+
         self.xi += y_err * dt
+
+        # anti-windup
+        np.clip(self.xi, -self.xi_max, self.xi_max, out=self.xi)
+
         return -self.K @ state_err - self.Ki @ self.xi
 
     def reset(self):
