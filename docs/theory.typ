@@ -465,7 +465,7 @@ where,
 
 === Equilibrium
 
-  $ x^* = vec([s_(P L) (t)]^I + vec(0,0,L), [v_(P L)]^I, 0 ) $
+  $ x^* = vec([underline(s)_(P L) (t)]^I + vec(0,0,L), [underline(v)_(P L)]^I, 0 ) $
 
 
 ]
@@ -487,7 +487,7 @@ where,
 === Output
   $ y = C x $
 
-  $ y = [s_(P L)]^I\
+  $ y = [underline(s)_(P L)]^I\
   = vec(s_1^I - L alpha_x^I, s_2^I - L alpha_y^I, s_3^I - L) $
 
   $ arrow.r.double C $
@@ -498,7 +498,7 @@ where,
 === Augmented State-space
 
   $ dot(z) = overline(A) z + overline(B) u $
-  $ z = vec(x, integral [s_(P L)]^I ) $
+  $ z = vec(x, integral [underline(s)_(P L)]^I ) $
   $ arrow.r.double overline(A), overline(B) $
 
 === Cost minimization
@@ -515,9 +515,8 @@ State weighting matrix,
 Control weighting matrix,
   $ R = ("tuning const") times mat(1,0,0;0,1,0;0,0,1) $
 
+Solving for the gain matrix,
   $ overline(A)^top P + P overline(A) - P overline(B) R^(-1) overline(B)^top P + overline(Q) = 0 arrow.r.double P $
   $ overline(K) = R^(-1) overline(B)^top P $
 
 ]
-
-

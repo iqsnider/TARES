@@ -10,7 +10,7 @@ import math
 import numpy as np
 
 import Prm.config as config
-import sim.drone_test_only_mission_manager as mission
+import sim.mission_manager as mission
 from sim import plotting
 from sim.simulation import control_law
 from sim.simulation.model import nonlinear_ode, payload_state

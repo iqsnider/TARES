@@ -1,4 +1,4 @@
-import sim.drone_test_only_mission_manager as drone_only_mission
+import sim.mission_manager as mission
 import Prm.config as config
 
 from comms.control import get_state_enu
@@ -6,6 +6,36 @@ from comms.control import get_state_enu
 from logs.flight import FlightLogger
 import time
 import numpy as np
+
+class SafeFlightPlan:
+    """
+    Generates a flight plan from a given waypoint file.
+    Creates SafeTrajectory objects between each waypoint.
+    """
+    def __init__(self,
+                 m, # MAVLink connection
+                 wp_file=None,
+                 wp_dict=None,
+                 wp_hover_time=10, # [s]
+                 speed=1, # [m/s]
+                 logger=None):
+
+        # initialization
+        if logger == None:
+            self.logger = FlightLogger()
+            self.logger.note_sent(mode=m.flightmode)
+        else:
+            self.logger = logger
+            self.logger.note_sent(mode=m.flightmode)
+
+
+    def load_next_trajectory_from_file(self, iteration):
+        """
+        Returns a SafeTrajectory object for the drone at the current trajectory iteration
+        """
+
+
+
 
 
 class SafeTrajectory:
@@ -67,7 +97,7 @@ class SafeTrajectory:
         """
         Computes the reference trajectory object for only the drone
         """
-        reference_trajectory_obj = drone_only_mission.ReferenceTrajectory(self.p0, self.p1, self.speed,
+        reference_trajectory_obj = mission.ReferenceTrajectory(self.p0, self.p1, self.speed,
                                                                           self.startPointHoverTime, self.endPointHoverTime)
         return reference_trajectory_obj
 
@@ -76,7 +106,7 @@ class SafeTrajectory:
         Computes the reference trajectory object for the payload
         """
         tether = np.array([0, 0, config.TETHER_LEN])
-        reference_trajectory_obj = drone_only_mission.ReferenceTrajectory(self.p0 - tether, self.p1 - tether, self.speed,
+        reference_trajectory_obj = mission.ReferenceTrajectory(self.p0 - tether, self.p1 - tether, self.speed,
                                                                           self.startPointHoverTime, self.endPointHoverTime)
         return reference_trajectory_obj
 
