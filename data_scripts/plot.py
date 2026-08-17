@@ -59,7 +59,7 @@ def kind_traj(s, save, cam=False):
 def kind_ekf(s, save, cam=False):
     """Run the payload EKF and show the 3-D and time-series comparisons.
 
-    With `cam`, the recording is also written back out as an .avi carrying the
+    With `cam`, the recording is also written back out as an .mp4 carrying the
     estimated payload position.
     """
     import ekf_plots
@@ -86,7 +86,7 @@ def kind_overlay(s, save, cam=False):
     else:
         records = ekf_plots.analyse(s, verbose=False)["records"]
     ekf_plots.overlay_video(s, records,
-                            save=_out(save, f"{s.id}_ekf_overlay.avi"))
+                            save=_out(save, f"{s.id}_ekf_overlay.mp4"))
 
 
 KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf,
@@ -107,7 +107,7 @@ def main(argv=None):
                     help="write PNGs here instead of only showing them")
     ap.add_argument("--cam", action="store_true",
                     help="ekf only: also write the recording back out as an "
-                         ".avi with the estimated payload drawn on it")
+                         ".mp4 with the estimated payload drawn on it")
     ap.add_argument("--root", default=None, help="override the data root")
     args = ap.parse_args(argv)
 

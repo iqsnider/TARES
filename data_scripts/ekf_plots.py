@@ -4,7 +4,7 @@ Run the payload EKF on a recorded flight and produce:
   2. a time-series comparison of the EKF against the per-frame camera
      measurement -- swing angles and payload yaw -- with occlusion shading
      and the 2-sigma band
-  3. with --cam, the camera recording written back out as an .avi with the
+  3. with --cam, the camera recording written back out as an .mp4 with the
      estimated payload position drawn on every frame
 
 Both logs stamp every row with the same wall clock, so the offset between the
@@ -317,7 +317,7 @@ def plot_timeseries(R, meas_df, save=None):
 # --------------------------------------------------------------------------
 # camera overlay
 # --------------------------------------------------------------------------
-OVERLAY_SUFFIX = "_ekf_overlay.avi"
+OVERLAY_SUFFIX = "_ekf_overlay.mp4"
 
 
 def find_recording(session):
@@ -554,7 +554,7 @@ def overlay_video(session, records, save=None, n_sigma=2):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     out = Path(save) if save else src.with_name(session.id + OVERLAY_SUFFIX)
-    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"MJPG"),
+    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"),
                              fps, (w, h))
 
     K, D = _intrinsics()

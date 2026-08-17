@@ -76,8 +76,8 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
-        startPointHoverTime = 30
-        endPointHoverTime = 30
+        startPointHoverTime = 15
+        endPointHoverTime = 15
 
         # ENU to ENU. payload_trajectory()
         # reference is where payload should be
@@ -89,7 +89,7 @@ if __name__ == '__main__':
                                      logger=logger).payload_trajectory()
 
         # define outer-loop control law
-        controller = dynamics.OuterLoopPayloadLQI()
+        controller = dynamics.OuterLoopPayloadLQR()
 
         # payload swing estimator: attitude comes from the logger cache, which
         # ControlComms has already populated by blocking for the first state

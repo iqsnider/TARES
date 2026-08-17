@@ -291,10 +291,7 @@ class ControlComms:
             self.logger.pump(self.m)
             c = self.logger.cache
 
-            # the pilot flipping out of GUIDED ends the test. ardupilot is
-            # already ignoring our setpoints at that point, so the only thing
-            # left to get right is to stop and not touch the vehicle again.
-            # '?' is the state before the first heartbeat has been seen.
+            # the pilot flipping out of GUIDED ends the test
             if c['echoed_mode'] not in ("GUIDED", "?"):
                 self.pilot_override = True
                 print(f"pilot override: mode is {c['echoed_mode']}, "
@@ -314,9 +311,6 @@ class ControlComms:
             else:
                 last_seq = seq
 
-            # predict over the time that actually passed, not the period we
-            # asked for: a loop that slips would otherwise advance the swing
-            # dynamics short and hand the controller a stale estimate
             dt_ekf = dt if t_prev is None else t - t_prev
             t_prev = t
 
