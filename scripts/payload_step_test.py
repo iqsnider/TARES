@@ -32,7 +32,7 @@ if __name__ == '__main__':
     preview_port = None                  # live MJPEG view; None to disable
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08072026/payload_step_test_{stamp}"
+    data_dir = f"data/test_08192026/payload_step_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 

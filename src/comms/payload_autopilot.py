@@ -74,7 +74,6 @@ class StickControl(ControlComms):
 
     def run_payload_stick_control(self, payload_controller=dynamics.OuterLoopPayloadLQR()):
         """
-        Should only run once in GUIDED mode.
         Initializes the payload control system and loops the stick listener
         Locks drone yaw.
         """
@@ -204,14 +203,9 @@ class StickControl(ControlComms):
         self.yaw_pwm = c["ch4"] # yaw (not necessary, but we'll grab it for sake of completeness)
 
 
-    def calibrate_stick_control(self):
-        """
-        Figures out the parameters needed for the correct stick to payload transfer function
-        """
-
     def _close_link(self):
         """
-        Ends the program
+        Prepares the program for ending
         """
         comms.set_mode(self.m, "BRAKE")
         comms.set_guid_options(self.m, 0)
