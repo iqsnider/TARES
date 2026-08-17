@@ -90,3 +90,11 @@ GRID_ALTITUDE = 15
 
 ##### control parameters #####
 CONTROL_FREQUENCY = 50
+
+##### transmitter control tuning #####
+STICK_TRIM = 1500
+STICK_TRAVEL = 397
+STICK_DZ = 15
+STICK_TAU = 2 # maximum acceleration is V_MAX / STICK_TAU
+PAYLOAD_V_XY_MAX = 1.5 # m/s
+PAYLOAD_V_Z_MAX = 0.5 # m/s

@@ -39,11 +39,6 @@ class StickControl(ControlComms):
         self.yaw_pwm = 1498 # yaw, centers 1498 (not necessary, but we'll grab it for sake of completeness)
         # self.mode_pwm = 1102 # mode: 1102 LOITER, 1500 GUIDED, 1897 STABILIZE (may not be necessary, because mode information is more generally grabbed from the HEARTBEAT)
 
-        # initialize payload reference velocity and acceleration to zero
-        self.ref_position = np.zeros(3) # TODO: set to current payload position
-        self.ref_velocity = np.zeros(3) # initialize to 0 for hover
-        self.ref_acceleration = np.zeros(3) # initialize to 0 for hover
-
         # initialize data collection
         self.stamp = stamp
         self.data_dir = data_dir
@@ -68,7 +63,7 @@ class StickControl(ControlComms):
         # initialize mode information
         self.logger.pump(self.m)
         c = self.logger.cache
-        self.mode = c["echoed_mode"] # TODO: replace transmitter aux althold with GUIDED mode
+        self.mode = c["echoed_mode"]
 
 
 
@@ -96,9 +91,22 @@ class StickControl(ControlComms):
         # pass, which has no elapsed time to measure and uses the nominal one
         t_prev = None
 
+        # initialize the payload reference
+        self.logger.pump(self.m)
+        c = self.logger.cache
+        x = self.get_state_enu(c['ned'], prev=x)
+        last_seq, poses = self.recorder.latest_poses()
+        xi, _ = est.step_ekf(self.ekf, poses, a_I, dt, c['roll'], c['pitch'], c['yaw'])
+        self.ref_position = x[0:3] + L*np.array([xi[0], xi[1], -1])
+        self.ref_velocity = np.zeros(3)
+        self.ref_acceleration = np.zeros(3)
+        self.thr_armed = False
+
+
         # intialize time for control loop
         t0 = time.time()
         next_t = t0
+
 
         # run payload stick control when mode is set to GUIDED
         while self.mode == "GUIDED":
@@ -125,7 +133,7 @@ class StickControl(ControlComms):
                                  c['roll'], c['pitch'], c['yaw'])
 
             # generate the payload reference from the stick inputs
-            p_ref, v_ref = self.stick_to_payload_ref()
+            p_ref, v_ref, a_ref = self.stick_to_payload_ref(dt=dt_ekf, yaw=c["yaw"])
             x_ref = dynamics.tether_equilibrium_state(p_ref, v_ref, L)
 
             # assemble the measured 16-state and compute the control input
@@ -174,20 +182,69 @@ class StickControl(ControlComms):
                 self.mode = c["echoed_mode"]
 
                 if self.mode == payload_control_mode:
+                    print("GUIDED mode detected, switching to payload stick control...")
                     self.run_payload_stick_control(payload_controller)
 
                 time.sleep(1/self.hz)
         finally:
             self._close_link()
 
+    @staticmethod
+    def _norm(pwm):
+        """
+        Stick PWM -> [-1, 1], deadzone removed and slope corrected for it.
+        """
+        d = pwm - config.STICK_TRIM
+        if abs(d) <= config.STICK_DZ:
+            return 0
 
+        d = np.sign(d)*(abs(d) - config.STICK_DZ) / (config.STICK_TRAVEL - config.STICK_DZ)
 
-    def stick_to_payload_ref(self):
+        normalized_pwm = float(np.clip(d, -1, 1))
+
+        return normalized_pwm
+
+    def stick_to_payload_ref(self, dt, yaw=None):
         """
         Converts stick PWM signals to payload reference position/velocity/acceleration.
+        ENU if no yaw, if yaw the direction is reference to whatever direction the body is facing.
         The reference is then used for the payload controller to track.
         Sets the corresponding class attributes.
         """
+        self._get_stick_signals()
+        sr = self._norm(self.roll_pwm)
+        sp = -self._norm(self.pitch_pwm)
+        st = self._norm(self.throttle_pwm)
+
+        # no vetical control until pilot centers stick
+        if not self.thr_armed and st == 0:
+            self.thr_armed = True
+
+        v_cmd = np.zeros(3)
+
+        # referenced to drone direction
+        if yaw is not None:
+            v_cmd[0] = config.PAYLOAD_V_XY_MAX*(sp*np.sin(yaw) + sr*np.cos(yaw))
+            v_cmd[1] = config.PAYLOAD_V_XY_MAX*(sp*np.cos(yaw) - sr*np.sin(yaw))
+
+        # ENU reference
+        else:
+            v_cmd[0] = config.PAYLOAD_V_XY_MAX*sr
+            v_cmd[1] = config.PAYLOAD_V_XY_MAX*sp
+
+
+        if self.thr_armed:
+            v_cmd[2] = config.PAYLOAD_V_Z_MAX*st
+        else:
+            v_cmd[2] = 0
+
+        # simple ramp
+        self.ref_acceleration = (v_cmd - self.ref_velocity)/config.STICK_TAU
+        self.ref_velocity += self.ref_acceleration*dt
+        self.ref_position += self.ref_velocity*dt
+
+        return self.ref_position, self.ref_velocity, self.ref_acceleration
+
 
 
     def _get_stick_signals(self):
