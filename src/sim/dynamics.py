@@ -164,8 +164,8 @@ class OuterLoopPayloadLQI:
                  w_pos_z=(1/1)**2,
                  w_int_xy=(1/1)**2,
                  w_int_z=(1/1)**2,
-                 tuning_const=1/1**2
-                 int):
+                 tuning_const=(1/1)**2,
+                 e_band=8):
         L = config.TETHER_LEN
         A, B = self._build_system()
         C = np.zeros((3, 10))
@@ -203,15 +203,16 @@ class OuterLoopPayloadLQI:
         self.Q = Q
         self.R = R
 
+        self.e_band = e_band
+
     def compute_u(self, state_err):
         dt = 1/config.CONTROL_FREQUENCY
 
         y_err = self.C @ state_err[self.OUTER_STATES]
 
-        self.xi += y_err * dt
-
-        # anti-windup
-        np.clip(self.xi, -self.xi_max, self.xi_max, out=self.xi)
+        # integration and anti-windup
+        if np.linalg.norm(y_err[:2]) < self.e_band:
+            self.xi += y_err*dt
 
         return -self.K @ state_err - self.Ki @ self.xi
 
@@ -321,6 +322,7 @@ class ArduPilotFlightController:
 
         # thrust calculation
         C_Sigma = m*np.sqrt(a1**2 + a2**2 + (a3 + g)**2)
+        C_Sigma = min(C_Sigma, config.C_SIGMA_MAX)
 
         # acceleration transform
         theta_s = a1*m/C_Sigma

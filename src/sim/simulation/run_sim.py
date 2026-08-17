@@ -71,7 +71,7 @@ def wind(acc=np.array([0, 1, 0]), transform=None):
     return transformed_acc
 
 
-def wind_generator(ts, wind_dict={20 : np.array([0, 1, 0]), 25 : np.array([0,0,0])}):
+def wind_generator(ts, wind_dict={20: np.array([0, 1, 0]), 25: np.array([0, 0, 0])}):
     """
     Inputs an ENU vector of the wind acceleration in the inertial frame and accepts a transform for putting the wind in another reference frame.
     """
@@ -187,7 +187,8 @@ def main():
                     help='which body the reference trajectory is drawn for')
 
     ap.add_argument('--ekf', action="store_true")
-    ap.add_argument('--wind', default={35 : np.array([3, 0, 0]), 70 : np.array([0,0,0])})
+    ap.add_argument('--wind', default={35: np.array([3, 1, 0]),
+                                       70: np.array([0, 0, 0])})
 
     args = ap.parse_args()
 
@@ -196,7 +197,7 @@ def main():
     architecture = control_law.build(args.arch)
 
     ref = mission.ReferenceTrajectory(p_start=np.array([0, 0, 15]),
-                                      p_end=np.array([0, -80, 15]),
+                                      p_end=np.array([0, -80, 50]),
                                       speed=1,
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)

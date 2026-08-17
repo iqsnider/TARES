@@ -23,12 +23,12 @@ class PayloadLQI:
     Inner loop: ArduPilot-style cascaded attitude/rate controller
     """
 
-    def __init__(self, w_pos_xy=(1/1)**2, w_pos_z=(1/0.1)**2,
-                 w_int_xy=(1/1)**2, w_int_z=(1/0.1)**2, tuning_const=1):
+    def __init__(self, w_pos_xy=(1/1)**2, w_pos_z=(1/1)**2,
+                 w_int_xy=(1/2)**2, w_int_z=(1/1)**2, tuning_const=2):
         self.outer = dynamics.OuterLoopPayloadLQI(w_pos_xy=w_pos_xy,
                                                   w_pos_z=w_pos_z,
-                                                  w_int_xy=(1/1)**2,
-                                                  w_int_z=(1/1)**2,
+                                                  w_int_xy=w_int_xy,
+                                                  w_int_z=w_int_z,
                                                   tuning_const=tuning_const)
         self.inner = dynamics.ArduPilotFlightController()
 
