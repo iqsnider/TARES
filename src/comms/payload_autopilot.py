@@ -195,7 +195,7 @@ class StickControl(ControlComms):
         Stick PWM -> [-1, 1], deadzone removed and slope corrected for it.
         """
         d = pwm - config.STICK_TRIM
-        if abs(d) <= config.STICK_DZ:
+        if not np.isfinite(d) or abs(d) <= config.STICK_DZ:
             return 0
 
         d = np.sign(d)*(abs(d) - config.STICK_DZ) / (config.STICK_TRAVEL - config.STICK_DZ)
@@ -251,20 +251,18 @@ class StickControl(ControlComms):
         """
         Gets the stick PWM signal and sets the corresponding class attributes
         """
-        self.logger.pump(self.m)
-        c = self.logger.cache
-
-        self.roll_pwm = c["ch1"] # roll
-        self.pitch_pwm = c["ch2"] # pitch
-        self.throttle_pwm = c["ch3"] # throttle
-        self.yaw_pwm = c["ch4"] # yaw (not necessary, but we'll grab it for sake of completeness)
+        rc = self.logger.cache["rc"]
+        self.roll_pwm = rc[0] # ch1
+        self.pitch_pwm = rc[1] # ch2
+        self.throttle_pwm = rc[2] # ch3
+        self.yaw_pwm = rc[3] # ch4
 
 
     def _close_link(self):
         """
         Prepares the program for ending
         """
-        comms.set_mode(self.m, "BRAKE")
+        comms.set_mode(self.m, "BRAKE", logger=self.logger)
         comms.set_guid_options(self.m, 0)
         self.recorder.stop()
         self.cam_thread.join(timeout=5)
