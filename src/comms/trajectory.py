@@ -7,18 +7,27 @@ from logs.flight import FlightLogger
 import time
 import numpy as np
 
+
 class SafeFlightPlan:
     """
-    Generates a flight plan from a given waypoint file.
+    Generates a flight plan from a given waypoint file or dictionary, in which each step in the dictionary moves ENU from the current position in meters.
     Creates SafeTrajectory objects between each waypoint.
     """
+
     def __init__(self,
-                 m, # MAVLink connection
-                 wp_file=None,
-                 wp_dict=None,
-                 wp_hover_time=10, # [s]
-                 speed=1, # [m/s]
+                 m,  # MAVLink connection
+                 wp_file=None,  # TODO: waypoint file parser
+                 wp_dict={1: [-20, 0, 0],
+                          2: [0, -20, 0],
+                          3: [20, 0, 0],
+                          4: [0, 20, 0]},
+                 wp_hover_time=15,  # [s]
+                 speed=1,  # [m/s]
                  logger=None):
+
+        if wp_file is not None:
+            raise NotImplementedError(
+                "waypoint file parsing is not yet implemented, pass wp_dict instead")
 
         # initialization
         if logger == None:
@@ -28,14 +37,38 @@ class SafeFlightPlan:
             self.logger = logger
             self.logger.note_sent(mode=m.flightmode)
 
+        self.m = m
+        self.wp_dict = wp_dict
+        self.wp_hover_time = wp_hover_time
+        self.speed = speed
 
-    def load_next_trajectory_from_file(self, iteration):
+    def legs(self):
         """
-        Returns a SafeTrajectory object for the drone at the current trajectory iteration
+        builds a SafeTrajectory for each waypoint in wp_dict, in key
+        order. Each waypoint's displacement is relative ENU meters.
         """
+        for key in sorted(self.wp_dict):
+            p_end = self.wp_dict[key]
+            yield SafeTrajectory(self.m, None, p_end, self.speed,
+                                 startPointHoverTime=self.wp_hover_time,
+                                 endPointHoverTime=self.wp_hover_time,
+                                 startFromCurrentPosition=True,
+                                 relativeEnd=True,
+                                 logger=self.logger)
 
+    def drone_trajectories(self):
+        """
+        Yields the drone-only reference trajectory for each leg of the plan, in order.
+        """
+        for leg in self.legs():
+            yield leg.drone_trajectory()
 
-
+    def payload_trajectories(self):
+        """
+        Yields the payload reference trajectory for each leg of the plan, in order.
+        """
+        for leg in self.legs():
+            yield leg.payload_trajectory()
 
 
 class SafeTrajectory:
@@ -74,13 +107,15 @@ class SafeTrajectory:
         # if not start from current position, evaluate safety of requested starting position
         else:
             print("Starting from predefined location, evaluating safety...")
-            safety = self._evaluate_starting_safety(m, p_start, p_end, speed, startPointHoverTime, endPointHoverTime, self.logger)
+            safety = self._evaluate_starting_safety(
+                m, p_start, p_end, speed, startPointHoverTime, endPointHoverTime, self.logger)
 
             if safety:
                 print("Starting location is safe")
                 self.p0 = np.asarray(p_start, dtype=float)
             if safety == False:
-                raise RuntimeError("Unsafe starting conditions, aborting autonomy test")
+                raise RuntimeError(
+                    "Unsafe starting conditions, aborting autonomy test")
 
         # check if we also want the end relative to wherever we started
         if relativeEnd:
@@ -98,7 +133,7 @@ class SafeTrajectory:
         Computes the reference trajectory object for only the drone
         """
         reference_trajectory_obj = mission.ReferenceTrajectory(self.p0, self.p1, self.speed,
-                                                                          self.startPointHoverTime, self.endPointHoverTime)
+                                                               self.startPointHoverTime, self.endPointHoverTime)
         return reference_trajectory_obj
 
     def payload_trajectory(self):
@@ -107,7 +142,7 @@ class SafeTrajectory:
         """
         tether = np.array([0, 0, config.TETHER_LEN])
         reference_trajectory_obj = mission.ReferenceTrajectory(self.p0 - tether, self.p1 - tether, self.speed,
-                                                                          self.startPointHoverTime, self.endPointHoverTime)
+                                                               self.startPointHoverTime, self.endPointHoverTime)
         return reference_trajectory_obj
 
     @staticmethod
@@ -130,17 +165,21 @@ class SafeTrajectory:
 
         # evaluate difference between p_start and current_position
         # get_state_enu returns [p, v]; only the position half is comparable
-        delta = np.linalg.norm(np.asarray(p_start, dtype=float) - current_position[:3])
+        delta = np.linalg.norm(np.asarray(
+            p_start, dtype=float) - current_position[:3])
 
         # unsafe position notification
         if delta > safe_starting_delta:
             print("DANGER")
-            print(f"Difference between requested start position and current start position is: {delta} m")
-            user_response_to_unsafe = input("Do you wish to continue? (YES/NO): ")
+            print(f"Difference between requested start position and current start position is: {
+                  delta} m")
+            user_response_to_unsafe = input(
+                "Do you wish to continue? (YES/NO): ")
 
             # check user response
             if user_response_to_unsafe == "NO":
-                raise RuntimeError("Unsafe starting position, aborting autonomy test")
+                raise RuntimeError(
+                    "Unsafe starting position, aborting autonomy test")
 
             if user_response_to_unsafe == "YES":
                 safe_start_pos_flag = True

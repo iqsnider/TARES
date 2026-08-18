@@ -64,7 +64,8 @@ def Rz(a): c, s = np.cos(a), np.sin(a); return np.array(
 
 CAM_ROLL = 0  # rad, about the nose axis (+Y, front)
 CAM_PITCH = 0  # rad, about the lateral axis (+X, starboard)
-CAM_YAW = PI/2  # rad, about vertical axis (+Z, top), right hand rule
+# rad, about vertical axis (+Z, top), right hand rule (0 when up on the camera frame is in the drone nose direction)
+CAM_YAW = PI/2
 
 # camera at zero rpy stares straight down, top of the image toward the nose
 R_CAM_DOWN = np.diag([1, -1, -1])
@@ -95,6 +96,6 @@ CONTROL_FREQUENCY = 50
 STICK_TRIM = 1500
 STICK_TRAVEL = 397
 STICK_DZ = 15
-STICK_TAU = 2 # maximum acceleration is V_MAX / STICK_TAU
-PAYLOAD_V_XY_MAX = 1.5 # m/s
-PAYLOAD_V_Z_MAX = 0.5 # m/s
+STICK_TAU = 2  # maximum acceleration is V_MAX / STICK_TAU
+PAYLOAD_V_XY_MAX = 1.5  # m/s
+PAYLOAD_V_Z_MAX = 0.5  # m/s
