@@ -49,12 +49,12 @@ class ControlComms:
         self._request_fast_state()
 
         # logger initialization
+        # sent_mode is left alone here: it means the last mode this script
+        # commanded, not whatever the FC happened to be in at startup
         if logger == None:
             self.logger = FlightLogger()
-            self.logger.note_sent(mode=self.m.flightmode)
         else:
             self.logger = logger
-            self.logger.note_sent(mode=self.m.flightmode)
 
         # initialize control states
         self._initialize_control_logs()
@@ -63,8 +63,6 @@ class ControlComms:
         """
         Gets initial state for control logic
         """
-        self.logger.note_sent(mode=self.m.flightmode)
-
         # wait for attitude and NED
         t_wait = time.time() + 5
         while self.x0 is None or np.isnan(self.logger.cache['yaw']):

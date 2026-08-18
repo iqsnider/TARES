@@ -65,6 +65,9 @@ class StickControl(ControlComms):
         c = self.logger.cache
         self.mode = c["echoed_mode"]
 
+        # making time monotonic
+        self.t0 = time.time()
+
 
 
     def run_payload_stick_control(self, payload_controller=dynamics.OuterLoopPayloadLQR()):
@@ -104,13 +107,12 @@ class StickControl(ControlComms):
 
 
         # intialize time for control loop
-        t0 = time.time()
-        next_t = t0
+        next_t = time.time()
 
 
         # run payload stick control when mode is set to GUIDED
         while self.mode == "GUIDED":
-            t = time.time() - t0
+            t = time.time() - self.t0
             self.logger.pump(self.m)
             c = self.logger.cache
 
@@ -174,6 +176,7 @@ class StickControl(ControlComms):
         """
         if payload_controller is None:
             payload_controller = dynamics.OuterLoopPayloadLQR()
+        x = self.x0
         try:
             while True:
                 self.logger.pump(self.m)
@@ -182,8 +185,13 @@ class StickControl(ControlComms):
                 self.mode = c["echoed_mode"]
 
                 if self.mode == payload_control_mode:
-                    print("GUIDED mode detected, switching to payload stick control...")
+                    print(f"{payload_control_mode} mode detected, switching to payload stick control...")
                     self.run_payload_stick_control(payload_controller)
+
+                # log while idle too, so time outside the control loop is
+                # visible instead of collapsing into a single row
+                x = self.get_state_enu(c['ned'], prev=x)
+                self.logger.log(time.time() - self.t0, x)
 
                 time.sleep(1/self.hz)
         finally:
@@ -262,7 +270,10 @@ class StickControl(ControlComms):
         """
         Prepares the program for ending
         """
-        comms.set_mode(self.m, "BRAKE", logger=self.logger)
+        self.logger.pump(self.m)
+        if self.logger.cache["echoed_mode"] == "GUIDED":
+            comms.set_mode(self.m, "BRAKE", logger=self.logger)
+
         comms.set_guid_options(self.m, 0)
         self.recorder.stop()
         self.cam_thread.join(timeout=5)

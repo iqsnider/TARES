@@ -60,7 +60,7 @@ def set_mode(m, mode_name, timeout=5, logger=None):
         if heartbeat and heartbeat.custom_mode == mode_id:
             print(f"mode = {mode_name}")
             if logger is not None:
-                logger.note_sent(mode={mode_name})
+                logger.note_sent(mode=mode_name)
             return
     raise TimeoutError(f"mode did not change to {mode_name} within {timeout}s")
 
