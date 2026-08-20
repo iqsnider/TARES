@@ -24,7 +24,7 @@ if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
     # connection = "udp:127.0.0.1:14550"
-    takeoff_altitude = 15
+    # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
@@ -34,7 +34,7 @@ if __name__ == '__main__':
     preview_port = None                  # live MJPEG view; None to disable
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_08192026/payload_flightplan_test_{stamp}"
+    data_dir = f"data/test_08192026/payload_flightplan_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     m = comms.connect(connection, baud)
 
     # check for armability
-    comms.wait_until_armable(m)
+    # comms.wait_until_armable(m)
 
     # GUIDED mode is easiest for external commands
     comms.set_guid_options(m, 0)
@@ -88,7 +88,7 @@ if __name__ == '__main__':
                                       logger=logger)
 
         # define outer-loop control law
-        controller = dynamics.OuterLoopPayloadLQI()
+        controller = dynamics.OuterLoopPayloadLQR()
 
         # payload swing estimator: attitude comes from the logger cache, which
         # ControlComms has already populated by blocking for the first state

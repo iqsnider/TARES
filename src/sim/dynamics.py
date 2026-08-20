@@ -83,10 +83,8 @@ class OuterLoopPayloadLQR:
     """
 
     def __init__(self,
-                 w_pos_xy=(1/1)**2,
-                 w_pos_z=(1/1)**2,
-                 w_int_xy=(1/1)**2,
-                 w_int_z=(1/1)**2,
+                 w_pos_xy=(1/1.2)**2, # 1 for AuX4
+                 w_pos_z=(1/1.2)**2, # 1 for AuX4
                  tuning_const=1/1**2
                  ):
         L = config.TETHER_LEN
@@ -160,12 +158,12 @@ class OuterLoopPayloadLQI:
     OUTER_STATES = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
 
     def __init__(self,
-                 w_pos_xy=(1/1)**2,
-                 w_pos_z=(1/1)**2,
-                 w_int_xy=(1/1)**2,
-                 w_int_z=(1/1)**2,
+                 w_pos_xy=(1/1.5)**2, # 1 for AuX4
+                 w_pos_z=(1/1.5)**2, # 1 for AuX4
+                 w_int_xy=(1/8)**2, # 1/4 for AuX4
+                 w_int_z=(1/8)**2,  # 1/4 for AuX4
                  tuning_const=(1/1)**2,
-                 e_band=8):
+                 e_band=15):
         L = config.TETHER_LEN
         A, B = self._build_system()
         C = np.zeros((3, 10))

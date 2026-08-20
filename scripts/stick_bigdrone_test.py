@@ -1,4 +1,5 @@
 """
+bigdrone
 This test is for calibrating the stick signals from the payload response. Basically, just want to set the stick to payload transfer function such that the payload doesn't move around too fast or too slow.
 
 The idea here is that the pilot should focus on the tethered payload position. The LQR then helps the pilot keep the payload where they want it. Moving the stick on the transmitter basically just moves the reference point that the LQR is meant to track.
@@ -26,7 +27,7 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08192026/stick_control_test_{stamp}"
+    data_dir = f"data/test_08192026/stick_bigdrone_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -51,4 +52,5 @@ if __name__ == '__main__':
 
     print("monitoring for GUIDED mode...")
     # monitors the mode and swaps to payload stick control when in GUIDED
+    comms.set_mode(m, "GUIDED", logger=logger)
     controlLink.monitor_mode(payload_controller=controlLaw)

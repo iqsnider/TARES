@@ -27,7 +27,7 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_08192026/log_test_{stamp}"
+    data_dir = f"data/test_08192026/log_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -35,7 +35,7 @@ if __name__ == '__main__':
     m = comms.connect(connection, baud)
 
     # check for armability
-    comms.wait_until_armable(m)
+    # comms.wait_until_armable(m)
 
     track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]   # only these are logged; others dropped
     # start camera first

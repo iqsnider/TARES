@@ -1,5 +1,5 @@
 """
-This test is for running the closed-loop payload reference tracker and payload lqr control system with payload state estimator
+Big drone
 """
 # mission control imports
 import comms.common as comms
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     preview_port = None                  # live MJPEG view; None to disable
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08192026/payload_integrator_test_{stamp}"
+    data_dir = f"data/test_08192026/step_test_bigdrone_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     poses_out = f"{data_dir}/poses.csv"
 
@@ -56,17 +56,6 @@ if __name__ == '__main__':
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
 
-    # start camera first
-    recorder, cam_thread = cam.start_camera(
-        marker_size_m=config.MARKER_EDGE_LEN,
-        video_out=video_out,
-        csv_out=poses_out,
-        marker_ids=track_marker_ids,
-        preview_port=preview_port,
-        capture_fps=config.CAM_FPS,
-        frame_stride=config.CAM_STRIDE,
-        gain=config.CAM_GAIN,
-        exposure_abs=config.CAM_EXP_ABS)
 
     controlLink = None
     try:
@@ -81,31 +70,26 @@ if __name__ == '__main__':
 
         # ENU to ENU. payload_trajectory()
         # reference is where payload should be
-        ref = mission.SafeTrajectory(m, None, [0, -30, 0], speed=speed,
+        ref = mission.SafeTrajectory(m, None, [0, -20, 0], speed=speed,
                                      startPointHoverTime=startPointHoverTime,
                                      endPointHoverTime=endPointHoverTime,
                                      startFromCurrentPosition=True,
                                      relativeEnd=True,
-                                     logger=logger).payload_trajectory()
+                                     logger=logger).drone_trajectory()
 
         # define outer-loop control law
-        controller = dynamics.OuterLoopPayloadLQI()
+        controller = dynamics.OuterLoopLQR()
 
-        # payload swing estimator: attitude comes from the logger cache, which
-        # ControlComms has already populated by blocking for the first state
-        ekf = est.start_ekf(logger, recorder=recorder)
 
         # run autonomy
-        print("running payload controller...")
+        print("running bigdrone LQR controller...")
 
         # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
         comms.set_guid_options(m, 48)
 
-        controlLink.fly_payload_trajectory(ref,
+        controlLink.fly_drone_trajectory(ref,
                                            controller,
                                            duration=ref.duration,
-                                           recorder=recorder,
-                                           ekf=ekf,
                                            yaw_lock=True,
                                            reassert=False)
     finally:
@@ -118,6 +102,4 @@ if __name__ == '__main__':
             # stop the camera first so it flushes its video and pose csv
             # then close the flight logger
             comms.set_guid_options(m, 0)
-            recorder.stop()
-            cam_thread.join(timeout=5)
             logger.close()
