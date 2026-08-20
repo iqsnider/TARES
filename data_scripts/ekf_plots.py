@@ -8,8 +8,9 @@ Run the payload EKF on a recorded flight and produce:
      estimated payload position drawn on every frame
 
 Both logs stamp every row with the same wall clock, so the offset between the
-two comes off the files themselves (see `catalog.Session.pose_offset`); older
-runs, recorded before poses.csv carried wall_time, fall back to sessions.toml.
+two comes off the files themselves (see `catalog.Session.pose_offset`). A run
+recorded before poses.csv carried wall_time has no offset and cannot be run
+through this.
 """
 import json
 from pathlib import Path
@@ -50,7 +51,7 @@ MIN_DEPTH_M = 0.1
 LEAD_S = 1.0
 
 
-def direct_measurement(frames, inp, offset):
+def direct_measurement(frames, inp, offset, geom=None):
     """
     Per-frame swing angles straight from the PnP chain, no filtering.
     This is the orange scatter the EKF gets compared against. It is not
@@ -59,6 +60,7 @@ def direct_measurement(frames, inp, offset):
     The same pre-processing the filter is fed, so the two are exactly
     comparable.
     """
+    geom = pp.DEFAULT_GEOMETRY if geom is None else geom
     t_fl = inp["t"]
     rows = []
     for t_cam, g, det in frames:
@@ -68,7 +70,7 @@ def direct_measurement(frames, inp, offset):
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
-        m = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi))
+        m = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi), geom=geom)
         if m is None:
             continue
         rows.append((t_cam, *m, len(det)))
@@ -80,6 +82,7 @@ def estimated_payload_enu(records, fl, L_m):
     """p_payload = p_drone + L_m * q_I, drone position interpolated.
 
     Returns (t_flight, ENU) so the caller can put the estimate on a timeline.
+    Pass the session's own config_snapshot.json TETHER_LEN as `L_m`.
     """
     t = fl.cur_time.to_numpy()
     tf = np.array([r["t_flight"] for r in records])
@@ -90,44 +93,74 @@ def estimated_payload_enu(records, fl, L_m):
     return tf, np.c_[E, N, U] + L_m * q
 
 
-def analyse(session, verbose=True):
+def analyze(session, verbose=True):
     """Run the payload EKF over a session. Returns what the plots need.
 
-    Everything the filter depends on that is not in the data itself -- the
-    tether lengths -- comes off the session, so there are no paths or
-    constants here. The clock offset comes off the session too, which reads
-    it from the two logs' shared wall clock.
+    Geometry comes off session.config, not live Prm/config.py, so a session
+    recorded before it had a config_snapshot.json raises. The 3-D track and
+    the timeseries lines/sigma bands each prefer the onboard-logged estimate
+    over a post-hoc reconstruction when the log has what they need
+    (from_log, from_log_cov say which happened). The diagnostic prints
+    (RMS vs. measurement, gaps) are always post-hoc: they need a per-frame
+    detection count that was never logged onboard.
     """
     if not session.has_camera:
         raise SystemExit(f"session {session.id} has no camera data")
 
+    geom = pp.Geometry.from_snapshot(session.config)
     offset = session.pose_offset
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
-    records = run_full(frames, inp, offset)
-    meas_df = direct_measurement(frames, inp, offset)
+    records = run_full(frames, inp, offset, geom=geom)
+    meas_df = direct_measurement(frames, inp, offset, geom=geom)
     if verbose:
         print(f"pose clock -> flight clock: {offset:+.3f} s")
         print(f"{len(records)} filter steps, "
               f"{sum(r['n'] > 0 for r in records)} with a measurement")
-    R = summarise(records, meas_df) if verbose else None
+        summarise(records, meas_df)
 
-    est_t, est = estimated_payload_enu(records, session.fl, session.L_marker)
-    pdf = payload.get_payload_ENU_from_data(session.pose, session.flight,
-                                            time_offset=offset)
+    from_log = catalog.has_logged_states(session.fl)
+    from_log_cov = from_log and catalog.has_logged_covariance(session.fl)
+    track_records = logged_records(session) if from_log else records
+    R = _records_frame(track_records if from_log_cov else records)
+    if verbose:
+        print("3-D track: " + ("onboard-logged estimate" if from_log
+                               else "post-hoc reconstruction (no onboard log)"))
+        print("timeseries (alpha/psi_p/sigma): " +
+              ("onboard-logged" if from_log_cov else "post-hoc reconstruction"))
+
+    est_t, est = estimated_payload_enu(track_records, session.fl,
+                                       session.config["TETHER_LEN"])
+    pdf = payload.get_payload_ENU_from_data(
+        session.pose, session.fl, time_offset=offset, geom=geom,
+        control_freq=session.config.get("CONTROL_FREQUENCY"))
     return dict(records=records, meas_df=meas_df, R=R, est_t=est_t, est=est,
-                pdf=pdf, offset=offset)
+                pdf=pdf, offset=offset, from_log=from_log,
+                from_log_cov=from_log_cov)
+
+
+_R_COLS = ("t_cam", "n", "alpha_x", "alpha_y", "psi_p",
+          "sigma_alpha_x", "sigma_alpha_y", "sigma_psi_p")
+
+
+def _records_frame(records):
+    """
+    The columns a timeseries plot needs, off records shaped like
+    `run_full`'s or `logged_records`'s output.
+    """
+    return pd.DataFrame([{k: v for k, v in r.items() if k in _R_COLS}
+                         for r in records])
 
 
 def summarise(records, meas_df):
-    """Print the numbers worth checking after every run."""
-    R = pd.DataFrame([{k: v for k, v in r.items()
-                       if k in ("t_cam", "n",
-                                "alpha_x", "alpha_y", "psi_p",
-                                "sigma_alpha_x", "sigma_alpha_y",
-                                "sigma_psi_p")}
-                      for r in records])
+    """
+    Print the numbers worth checking after every run.
+
+    Always over the post-hoc `records`, never `logged_records`: the RMS and
+    gap numbers need a real per-frame detection count, never logged onboard.
+    """
+    R = _records_frame(records)
     sel = R.n > 0
     mi = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_x)
     mj = np.interp(R.t_cam, meas_df.t_cam, meas_df.alpha_y)
@@ -179,12 +212,16 @@ def _set_equal_3d(ax, X, Y, Z):
         pass
 
 
-def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
-    """Drone/payload/EKF paths in ENU.
+def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True,
+           from_log=None):
+    """
+    Drone/payload/EKF paths in ENU.
 
     `est_t` is the flight time of each row of `est_enu`. With `slider` the
     on-screen figure gets a time slider that plays the run back; the saved PNG
-    is written first, so the file always holds the whole flight.
+    is written first, so the file always holds the whole flight. `from_log`
+    (see `analyze`) sets the legend to say whether `est_enu` is onboard-logged
+    or reconstructed.
     """
     t = fl.cur_time.to_numpy()
     E = fl.drone_px_meas.to_numpy()
@@ -219,8 +256,11 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True):
 
     meas_ln, = ax.plot(pE, pN, pU, color=C_PAYLOAD, lw=1.4, alpha=0.85,
                        label="Payload (camera measurement)")
+    est_label = {True: "Payload (EKF estimate, onboard)",
+                False: "Payload (EKF estimate, reconstructed)",
+                None: "Payload (EKF estimate)"}[from_log]
     est_ln, = ax.plot(est_enu[:, 0], est_enu[:, 1], est_enu[:, 2],
-                      color=C_EST, lw=2.0, label="Payload (EKF estimate)")
+                      color=C_EST, lw=2.0, label=est_label)
 
     # the tether where the slider is; static until a slider is attached
     live_tether, = ax.plot([E[-1], est_enu[-1, 0]], [N[-1], est_enu[-1, 1]],
@@ -279,8 +319,16 @@ def _break_wraps(deg, jump=180.0):
     return deg
 
 
-def plot_timeseries(R, meas_df, save=None):
-    """EKF vs per-frame measurement, with the 2-sigma band."""
+def plot_timeseries(R, meas_df, save=None, from_log_cov=None):
+    """
+    EKF vs per-frame measurement, with the 2-sigma band.
+
+    `from_log_cov` (see `analyze`) sets the legend to say whether `R` is
+    onboard-logged or a post-hoc reconstruction.
+    """
+    est_label = {True: "EKF estimate (onboard)",
+                False: "EKF estimate (reconstructed)",
+                None: "EKF estimate"}[from_log_cov]
     fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
     # psi_p is a measured state now, so it gets a panel like the swing angles
     for k, (nm, lbl, sg) in enumerate(
@@ -293,7 +341,7 @@ def plot_timeseries(R, meas_df, save=None):
         a.plot(meas_df.t_cam, np.rad2deg(meas_df[nm]), ".", ms=4,
                color="tab:orange", label="per-frame camera measurement")
         a.plot(R.t_cam, y, "-", lw=1.6, color="tab:red",
-               label="EKF estimate")
+               label=est_label)
         a.fill_between(R.t_cam, y - 2*sig, y + 2*sig,
                        color="tab:red", alpha=0.2,
                        label=r"EKF $2\sigma$")
@@ -301,7 +349,10 @@ def plot_timeseries(R, meas_df, save=None):
         a.grid(alpha=0.3)
         a.legend(fontsize=8, loc="upper right")
 
-    axs[3].plot(R.t_cam, R.n, "k.", ms=3)
+    # off meas_df, not R: R.n is a placeholder (0 for every row) when R comes
+    # from the onboard log, which never recorded a per-frame detection count;
+    # meas_df is always the fresh per-frame measurement, so its n is real
+    axs[3].plot(meas_df.t_cam, meas_df.n, "k.", ms=3)
     axs[3].set_ylabel("markers seen")
     axs[3].set_yticks([0, 1, 2, 3])
     axs[3].set_xlabel("camera time [s]")
@@ -371,34 +422,61 @@ def _label(frame, c, lines, color=BGR_EST, gap=14, scale=1.15, thick=3):
 
 
 def logged_records(session):
-    """The onboard EKF's own output, per camera frame, shaped like `run_full`.
+    """
+    The onboard EKF's own output, per camera frame, shaped like `run_full`.
 
-    Nothing is re-estimated here: the states in the log are what the aircraft
-    actually flew on, so an overlay built from them shows the estimate the
-    controller had, not a better one reconstructed afterwards. The log is
-    resampled onto the camera's frame times, which is all the overlay needs.
-
-    No covariance is logged, so these records carry `P=None` and the overlay
-    draws the estimate without its uncertainty ellipse. Payload yaw is not
-    logged either; it is left at zero, and nothing the overlay draws uses it.
+    The states here are what the aircraft actually flew on, not a
+    reconstruction. `catalog.has_logged_covariance` gates psi_p and `P`: a
+    flight recorded before those were logged gets psi_p=0 and P=None instead
+    of a fabricated number. `P` is only the alpha_x/alpha_y/psi_p block, not
+    the full state covariance. `n` (markers seen) was never logged and stays
+    0, a placeholder, not "no detection".
     """
     fl = session.fl
     t = fl.cur_time.to_numpy()
     frames = session.poses.groupby("frame").time_s.first()
+    has_cov = catalog.has_logged_covariance(fl)
 
     t_cam = frames.to_numpy(float)
     t_flight = t_cam - session.pose_offset
     keep = (t_flight >= t[0]) & (t_flight <= t[-1])
+    n = keep.sum()
 
     def at(col):
         return np.interp(t_flight[keep], t, fl[col].to_numpy(float))
 
-    xi = np.column_stack([at(c) for c in catalog.LOGGED_STATE_COLS] +
-                         [np.zeros(keep.sum())])
+    psi_p_col = at("payload_psi_p") if has_cov else np.zeros(n)
+    xi = np.column_stack([at(c) for c in catalog.LOGGED_STATE_COLS] + [psi_p_col])
     phi, theta, psi = (at("drone_roll"), at("drone_pitch"), at("drone_yaw"))
+    nan = float("nan")
+
+    if has_cov:
+        axx, ayy, axy, app = (at("payload_cov_axx"), at("payload_cov_ayy"),
+                              at("payload_cov_axy"), at("payload_cov_psipsi"))
+        sigma_ax, sigma_ay = np.sqrt(axx), np.sqrt(ayy)
+        sigma_pp = np.sqrt(app)
+
+        def P_at(i):
+            P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM))
+            P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X] = axx[i]
+            P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y] = ayy[i]
+            P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y] = axy[i]
+            P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_X] = axy[i]
+            P[ekfm.IX_PSI_P, ekfm.IX_PSI_P] = app[i]
+            return P
+    else:
+        sigma_ax = sigma_ay = sigma_pp = np.full(n, nan)
+        P_at = lambda i: None
 
     return [dict(frame=int(f), t_cam=tc, t_flight=tf, n=0,
-                 xi=xi[i], P=None, T_IB=ekfm.T_IB_fn(phi[i], theta[i], psi[i]))
+                 xi=xi[i], P=P_at(i), T_IB=ekfm.T_IB_fn(phi[i], theta[i], psi[i]),
+                 alpha_x=xi[i, ekfm.IX_ALPHA_X], alpha_y=xi[i, ekfm.IX_ALPHA_Y],
+                 alpha_dot_x=xi[i, ekfm.IX_ALPHA_DOT_X],
+                 alpha_dot_y=xi[i, ekfm.IX_ALPHA_DOT_Y],
+                 psi_p=xi[i, ekfm.IX_PSI_P],
+                 sigma_alpha_x=sigma_ax[i], sigma_alpha_y=sigma_ay[i],
+                 sigma_psi_p=sigma_pp[i],
+                 q_I=np.array([xi[i, ekfm.IX_ALPHA_X], xi[i, ekfm.IX_ALPHA_Y], -1]))
             for i, (f, tc, tf) in enumerate(zip(frames.index[keep],
                                                 t_cam[keep], t_flight[keep]))]
 
@@ -539,8 +617,11 @@ def overlay_video(session, records, save=None, n_sigma=2):
     in metres. Frames the filter never reached are copied through untouched.
 
     Records with `P=None` -- the states read back out of a flight log, which
-    carries no covariance -- get the dot without the ellipse.
+    carries no covariance -- get the dot without the ellipse. The geometry
+    used to project the estimate into pixels comes from the session's own
+    config_snapshot.json (session.config), not the live Prm/config.py.
     """
+    geom = pp.Geometry.from_snapshot(session.config)
     src = find_recording(session)
     if src is None:
         raise SystemExit(f"session {session.id} has no recording next to "
@@ -558,7 +639,8 @@ def overlay_video(session, records, save=None, n_sigma=2):
                              fps, (w, h))
 
     K, D = _intrinsics()
-    filt = make_ekf(0, 0, 0, 0, 0, 0)
+    filt = make_ekf(0, 0, 0, 0, 0, 0, geom=geom,
+                    L=session.config.get("TETHER_LEN"))
     p_drone, v_drone = drone_states(session.fl, records)
     drawn = {}
     for k, r in enumerate(records):
@@ -644,15 +726,17 @@ if __name__ == "__main__":
     note = session.meta.get("note", "")
     print(f"{session.id}  {session.label}{'  -- ' + note if note else ''}")
 
-    r = analyse(session)
+    r = analyze(session)
 
     out = Path(args.save).expanduser() if args.save else None
     if out:
         out.mkdir(parents=True, exist_ok=True)
 
     plot_3d(session.fl, r["pdf"], r["est_t"], r["est"],
-            save=out and out / f"{session.id}_ekf_3d.png")
+            save=out and out / f"{session.id}_ekf_3d.png",
+            from_log=r["from_log"])
     plot_timeseries(r["R"], r["meas_df"],
-                    save=out and out / f"{session.id}_ekf_timeseries.png")
+                    save=out and out / f"{session.id}_ekf_timeseries.png",
+                    from_log_cov=r["from_log_cov"])
 
     plt.show()   # interactive, so the 3-D view can be panned

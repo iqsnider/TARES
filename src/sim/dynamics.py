@@ -53,9 +53,14 @@ class OuterLoopLQR:
     """
 
     def __init__(self,
-                 q_pos_xy=1, q_pos_z=1,
-                 q_vel_xy=1, q_vel_z=1,
-                 r_acc=1):
+                 q_pos_xy=None, q_pos_z=None,
+                 q_vel_xy=None, q_vel_z=None,
+                 r_acc=None):
+        q_pos_xy = config.LQR_DRONE_Q_POS_XY if q_pos_xy is None else q_pos_xy
+        q_pos_z = config.LQR_DRONE_Q_POS_Z if q_pos_z is None else q_pos_z
+        q_vel_xy = config.LQR_DRONE_Q_VEL_XY if q_vel_xy is None else q_vel_xy
+        q_vel_z = config.LQR_DRONE_Q_VEL_Z if q_vel_z is None else q_vel_z
+        r_acc = config.LQR_DRONE_R_ACC if r_acc is None else r_acc
         A, B = _build_double_integrator()
 
         # state cost
@@ -83,10 +88,13 @@ class OuterLoopPayloadLQR:
     """
 
     def __init__(self,
-                 w_pos_xy=(1/1.2)**2, # 1 for AuX4
-                 w_pos_z=(1/1.2)**2, # 1 for AuX4
-                 tuning_const=1/1**2
+                 w_pos_xy=None, w_pos_z=None,
+                 tuning_const=None
                  ):
+        w_pos_xy = config.LQR_PAYLOAD_W_POS_XY if w_pos_xy is None else w_pos_xy
+        w_pos_z = config.LQR_PAYLOAD_W_POS_Z if w_pos_z is None else w_pos_z
+        tuning_const = (config.LQR_PAYLOAD_TUNING_CONST if tuning_const is None
+                        else tuning_const)
         L = config.TETHER_LEN
         A, B = self._build_system()
 
@@ -158,12 +166,17 @@ class OuterLoopPayloadLQI:
     OUTER_STATES = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
 
     def __init__(self,
-                 w_pos_xy=(1/1.5)**2, # 1 for AuX4
-                 w_pos_z=(1/1.5)**2, # 1 for AuX4
-                 w_int_xy=(1/8)**2, # 1/4 for AuX4
-                 w_int_z=(1/8)**2,  # 1/4 for AuX4
-                 tuning_const=(1/1)**2,
-                 e_band=15):
+                 w_pos_xy=None, w_pos_z=None,
+                 w_int_xy=None, w_int_z=None,
+                 tuning_const=None,
+                 e_band=None):
+        w_pos_xy = config.LQI_PAYLOAD_W_POS_XY if w_pos_xy is None else w_pos_xy
+        w_pos_z = config.LQI_PAYLOAD_W_POS_Z if w_pos_z is None else w_pos_z
+        w_int_xy = config.LQI_PAYLOAD_W_INT_XY if w_int_xy is None else w_int_xy
+        w_int_z = config.LQI_PAYLOAD_W_INT_Z if w_int_z is None else w_int_z
+        tuning_const = (config.LQI_PAYLOAD_TUNING_CONST if tuning_const is None
+                        else tuning_const)
+        e_band = config.LQI_PAYLOAD_E_BAND if e_band is None else e_band
         L = config.TETHER_LEN
         A, B = self._build_system()
         C = np.zeros((3, 10))

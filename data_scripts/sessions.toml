@@ -1,28 +1,18 @@
 # What the filenames cannot tell you.
 #
-# catalog.py derives everything it can from the data directory itself. This
-# file holds the rest: geometry, your own notes, and the clock offset for runs
-# too old to carry one. Keys under [sessions.<id>] override [defaults], and
-# reach you as session.<name>:
+# catalog.py derives everything it can from the data directory itself.
+# Geometry comes off each session's own config_snapshot.json, and the
+# pose/flight clock offset off the wall clock both logs stamp on every row.
+# This file holds only what's left: your own notes, and which of a handful
+# of old runs came out of the simulator. Keys under [sessions.<id>] reach
+# you as session.<name>:
 #
 #     s = catalog.resolve("07232026.last")
-#     s.L_marker   -> 8.31
+#     s.note   -> "23 Jul 2026, last test of the day"
 #
 # Add a session by copying a stamp out of `uv run plot.py ls`.
 
-[defaults]
-# pose clock -> flight clock [s]. Both logs stamp every row with the same wall
-# clock now, so catalog reads this off the files and only falls back to here
-# for runs recorded before poses.csv carried a wall_time column. A value set
-# under [sessions.<id>] still overrides what the clocks say.
-pose_offset = 0.0
-# tether length used by the dynamics / from the pivot to the marker board [m]
-L_dyn = 8.0
-L_marker = 8.31
-
-
 [sessions.20260723_114556]
-pose_offset = 0.17          # NIS-minimising, mean normalised NIS 1.10
 note = "23 Jul 2026, last test of the day"
 
 

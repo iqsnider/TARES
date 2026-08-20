@@ -1,3 +1,4 @@
+import dataclasses
 import math
 import numpy as np
 import cv2
@@ -8,19 +9,52 @@ import Prm.config as config
 MEAS_DIM = 3
 IX_B_X, IX_B_Y, IX_PSI_MEAS = range(MEAS_DIM)
 
-MARKER_OFFSET = {config.LEFT_MARKER_ID: config.MARKER_CENTER_TO_CENTER_DIST,
-                 config.CENTER_MARKER_ID: 0,
-                 config.RIGHT_MARKER_ID: -config.MARKER_CENTER_TO_CENTER_DIST}
 
-T_BC = config.CAM_R
-T_CB = T_BC.T
-t_BC_B = np.array([config.CAM_OFFSET_X,
-                   config.CAM_OFFSET_Y,
-                   config.CAM_OFFSET_Z])
-l_B = config.TETHER_PIVOT_OFFSET
+@dataclasses.dataclass(frozen=True)
+class Geometry:
+    """
+    Camera/marker-board geometry for a swing-angle computation.
+
+    Prm/config.py changes between experiments, so build this from a
+    session's config_snapshot.json instead when analyzing old data.
+    """
+    marker_offset: dict
+    T_BC: np.ndarray
+    t_BC_B: np.ndarray
+    l_B: np.ndarray
+
+    @property
+    def T_CB(self):
+        return self.T_BC.T
+
+    @classmethod
+    def from_config(cls, cfg=config):
+        return cls(
+            marker_offset={cfg.LEFT_MARKER_ID: cfg.MARKER_CENTER_TO_CENTER_DIST,
+                          cfg.CENTER_MARKER_ID: 0,
+                          cfg.RIGHT_MARKER_ID: -cfg.MARKER_CENTER_TO_CENTER_DIST},
+            T_BC=np.asarray(cfg.CAM_R, dtype=float),
+            t_BC_B=np.array([cfg.CAM_OFFSET_X, cfg.CAM_OFFSET_Y, cfg.CAM_OFFSET_Z]),
+            l_B=np.asarray(cfg.TETHER_PIVOT_OFFSET, dtype=float))
+
+    @classmethod
+    def from_snapshot(cls, snap):
+        """From a session's config_snapshot.json (see catalog.Session.config)."""
+        return cls(
+            marker_offset={snap["LEFT_MARKER_ID"]: snap["MARKER_CENTER_TO_CENTER_DIST"],
+                          snap["CENTER_MARKER_ID"]: 0,
+                          snap["RIGHT_MARKER_ID"]: -snap["MARKER_CENTER_TO_CENTER_DIST"]},
+            T_BC=np.array(snap["CAM_R"], dtype=float),
+            t_BC_B=np.array([snap["CAM_OFFSET_X"], snap["CAM_OFFSET_Y"],
+                             snap["CAM_OFFSET_Z"]]),
+            l_B=np.array(snap["TETHER_PIVOT_OFFSET"], dtype=float))
 
 
-def center_from_records(records):
+# default for live call sites that don't pass their own geometry
+DEFAULT_GEOMETRY = Geometry.from_config()
+
+
+def center_from_records(records, geom=DEFAULT_GEOMETRY):
     """
     Payload board center and marker x-axis in the camera frame.
 
@@ -42,7 +76,7 @@ def center_from_records(records):
         mC = T_CM[:, 0]
         mC_estimates.append(mC)
 
-        offset = MARKER_OFFSET[int(marker_id)]
+        offset = geom.marker_offset[int(marker_id)]
 
         center_estimates.append(tC + offset*mC)
 
@@ -55,7 +89,7 @@ def center_from_records(records):
     return approx_center, approx_mC
 
 
-def get_payload_center_in_camera_frame(frame):
+def get_payload_center_in_camera_frame(frame, geom=DEFAULT_GEOMETRY):
     """
     Finds the payload center in the camera frame (offline: a poses.csv frame)
     """
@@ -64,25 +98,25 @@ def get_payload_center_in_camera_frame(frame):
                 (marker.x, marker.y, marker.z))
                for marker in frame.dropna(subset=["marker_id"]).itertuples()]
 
-    return center_from_records(records)
+    return center_from_records(records, geom=geom)
 
 
-def shift_origin(pC_ctr):
+def shift_origin(pC_ctr, geom=DEFAULT_GEOMETRY):
     """
     Shift the origin from the camera optical center to the tether pivot point
     """
-    pC = np.asarray(pC_ctr, float) + T_CB @ (t_BC_B - l_B)
+    pC = np.asarray(pC_ctr, float) + geom.T_CB @ (geom.t_BC_B - geom.l_B)
 
     normalized_pC = pC/np.linalg.norm(pC)
 
     return normalized_pC
 
 
-def payload_yaw(mC, T_IB):
+def payload_yaw(mC, T_IB, geom=DEFAULT_GEOMETRY):
     """
     Returns the payload yaw in the inertial frame from the averaged payload center mC in the camera frame
     """
-    mI = T_IB @ (T_BC @ np.asarray(mC, float))
+    mI = T_IB @ (geom.T_BC @ np.asarray(mC, float))
 
     z_psi_p = math.atan2(mI[1], mI[0])
 
@@ -101,34 +135,34 @@ def alpha_from_q_I(q):
     return alpha_x, alpha_y
 
 
-def _build_z(detection, T_IB):
+def _build_z(detection, T_IB, geom=DEFAULT_GEOMETRY):
     """
     Assemble the EKF measurement vector from a (center, mC) detection
     """
     p_ctr_C, mC = detection
 
-    b = shift_origin(p_ctr_C)
+    b = shift_origin(p_ctr_C, geom=geom)
 
     z = np.zeros(MEAS_DIM)
     z[IX_B_X] = b[0]
     z[IX_B_Y] = b[1]
-    z[IX_PSI_MEAS] = payload_yaw(mC, T_IB)
+    z[IX_PSI_MEAS] = payload_yaw(mC, T_IB, geom=geom)
 
     return z
 
 
-def measurement(frame, T_IB):
+def measurement(frame, T_IB, geom=DEFAULT_GEOMETRY):
     """
     Returns the measurement needed for the EKF from a given frame and drone attitude
     """
-    detection = get_payload_center_in_camera_frame(frame)
+    detection = get_payload_center_in_camera_frame(frame, geom=geom)
     if detection is None:
         return None
 
-    return _build_z(detection, T_IB)
+    return _build_z(detection, T_IB, geom=geom)
 
 
-def measurement_from_poses(poses, T_IB):
+def measurement_from_poses(poses, T_IB, geom=DEFAULT_GEOMETRY):
     """
     Live equivalent of measurement(), taking the recorder's pose dict.
 
@@ -140,29 +174,29 @@ def measurement_from_poses(poses, T_IB):
         return None
 
     detection = center_from_records(
-        [(mid, rvec, tvec) for mid, (rvec, tvec) in poses.items()])
+        [(mid, rvec, tvec) for mid, (rvec, tvec) in poses.items()], geom=geom)
     if detection is None:
         return None
 
-    return _build_z(detection, T_IB)
+    return _build_z(detection, T_IB, geom=geom)
 
 
-def swing_angles(frame, T_IB):
+def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):
     """
     One camera frame (alpha_x, alpha_y, psi_P), or None with no detection
     """
-    detection = get_payload_center_in_camera_frame(frame)
+    detection = get_payload_center_in_camera_frame(frame, geom=geom)
     if detection is None:
         return None
     p_ctr_C, mC = detection
 
-    b = shift_origin(p_ctr_C)
-    alpha_x, alpha_y = alpha_from_q_I(T_IB @ (T_BC @ b))
+    b = shift_origin(p_ctr_C, geom=geom)
+    alpha_x, alpha_y = alpha_from_q_I(T_IB @ (geom.T_BC @ b))
 
-    return alpha_x, alpha_y, payload_yaw(mC, T_IB)
+    return alpha_x, alpha_y, payload_yaw(mC, T_IB, geom=geom)
 
 
-def marker_bearings(frame):
+def marker_bearings(frame, geom=DEFAULT_GEOMETRY):
     """
     The individual markers behind the board center
     """
@@ -170,6 +204,6 @@ def marker_bearings(frame):
     for marker in frame.dropna(subset=["marker_id"]).itertuples():
         out[int(marker.marker_id)] = shift_origin([marker.x,
                                                    marker.y,
-                                                   marker.z])
+                                                   marker.z], geom=geom)
 
     return out

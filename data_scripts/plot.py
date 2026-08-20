@@ -39,19 +39,25 @@ def _out(save, name):
 def kind_drone(s, save, cam=False):
     """Everything the flight log alone can show."""
     import drone_plot
+    # only needed to draw the payload track, so a session with no onboard
+    # EKF states doesn't have to carry a config_snapshot.json to be plotted
+    L = s.config.get("TETHER_LEN") if catalog.has_logged_states(s.fl) else None
     drone_plot.plot_suite(s.fl, save=save and Path(save).expanduser(),
-                          stem=s.id)
+                          stem=s.id, L=L)
 
 
 def kind_traj(s, save, cam=False):
     """3-D trajectory of the drone with the camera-measured payload."""
     import payload_plot
+    import sim.estimation.pre_process as pp
     from sim.estimation.calculate_payload_position import (
         get_payload_ENU_from_data)
     if not s.has_camera:
         raise SystemExit(f"session {s.id} has no camera data; try `drone`")
-    pdf = get_payload_ENU_from_data(s.pose, s.flight,
-                                    time_offset=s.pose_offset)
+    pdf = get_payload_ENU_from_data(
+        s.pose, s.fl, time_offset=s.pose_offset,
+        geom=pp.Geometry.from_snapshot(s.config),
+        control_freq=s.config.get("CONTROL_FREQUENCY"))
     payload_plot.trajectory_plot_3d_with_payload(
         s.fl, pdf, save=_out(save, f"{s.id}_trajectory_3d.png"))
 
@@ -63,11 +69,13 @@ def kind_ekf(s, save, cam=False):
     estimated payload position.
     """
     import ekf_plots
-    r = ekf_plots.analyse(s)
+    r = ekf_plots.analyze(s)
     ekf_plots.plot_3d(s.fl, r["pdf"], r["est_t"], r["est"],
-                      save=_out(save, f"{s.id}_ekf_3d.png"))
+                      save=_out(save, f"{s.id}_ekf_3d.png"),
+                      from_log=r["from_log"])
     ekf_plots.plot_timeseries(r["R"], r["meas_df"],
-                              save=_out(save, f"{s.id}_ekf_timeseries.png"))
+                              save=_out(save, f"{s.id}_ekf_timeseries.png"),
+                              from_log_cov=r["from_log_cov"])
     if cam:
         kind_overlay(s, save)
 
@@ -84,7 +92,7 @@ def kind_overlay(s, save, cam=False):
     if catalog.has_logged_states(s.fl):
         records = ekf_plots.logged_records(s)
     else:
-        records = ekf_plots.analyse(s, verbose=False)["records"]
+        records = ekf_plots.analyze(s, verbose=False)["records"]
     ekf_plots.overlay_video(s, records,
                             save=_out(save, f"{s.id}_ekf_overlay.mp4"))
 

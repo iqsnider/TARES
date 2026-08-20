@@ -4,6 +4,7 @@ import numpy as np
 
 import Prm.config as config
 import sim.dynamics as dynamics
+import sim.estimation.ekf as ekfm
 
 from logs.flight import FlightLogger
 
@@ -40,6 +41,11 @@ class ControlComms:
         self.m = m
         self.hz = control_frequency
         self.x0 = None
+
+        # flight-wide clock zero, set once on the first fly_*_trajectory call
+        # so a multi-leg flight plan logs one continuous clock, not a reset
+        # timer per leg
+        self._t_flight0 = None
 
         # set once a control loop sees the pilot take the aircraft back;
         # defined here so cleanup can read it even if no loop ever ran
@@ -209,6 +215,9 @@ class ControlComms:
         # intialize time for control loop
         t0 = time.time()
         next_t = t0
+        if self._t_flight0 is None:
+            self._t_flight0 = t0
+        leg_offset = t0 - self._t_flight0
 
         # begin the control loop and run for the duration of the reference trajectory
         while (t := time.time() - t0) <= duration:
@@ -235,11 +244,11 @@ class ControlComms:
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
 
-            # log sent values
+            # log sent values, on the flight-wide clock rather than this leg's
             if yaw_ref is not None:
-                self.logger.log(t, x, p_ref, v_ref, u, yaw_ref=yaw_ref)
+                self.logger.log(t + leg_offset, x, p_ref, v_ref, u, yaw_ref=yaw_ref)
             else:
-                self.logger.log(t, x, p_ref, v_ref, u)
+                self.logger.log(t + leg_offset, x, p_ref, v_ref, u)
 
             # time step
             next_t += dt
@@ -283,6 +292,9 @@ class ControlComms:
         # intialize time for control loop
         t0 = time.time()
         next_t = t0
+        if self._t_flight0 is None:
+            self._t_flight0 = t0
+        leg_offset = t0 - self._t_flight0
 
         # begin the control loop and run for the duration of the reference trajectory
         while (t := time.time() - t0) <= duration:
@@ -313,7 +325,7 @@ class ControlComms:
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, _ = est.step_ekf(ekf, poses, a_I, dt_ekf,
+            xi, P = est.step_ekf(ekf, poses, a_I, dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # payload reference, lifted to the drone equilibrium
@@ -336,14 +348,20 @@ class ControlComms:
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
 
-            # log sent values. drone_*_ref is the lifted equilibrium the drone
-            # is actually chasing; payload_*_ref is what the mission asked for.
-            self.logger.log(t, x, u=u,
+            # log sent values, on the flight-wide clock rather than this leg's.
+            # drone_*_ref is the lifted equilibrium the drone is actually
+            # chasing; payload_*_ref is what the mission asked for.
+            self.logger.log(t + leg_offset, x, u=u,
                             yaw_ref=yaw_ref if yaw_ref is not None else 0,
                             payload_p_ref=p_ref,
                             payload_v_ref=v_ref,
                             payload_alpha=(xi[0], xi[1]),
-                            payload_alphadot=(xi[2], xi[3]))
+                            payload_alphadot=(xi[2], xi[3]),
+                            payload_psi_p=xi[ekfm.IX_PSI_P],
+                            payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                        P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                        P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                        P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
 
             # time step
             next_t += dt

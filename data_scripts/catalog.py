@@ -12,10 +12,11 @@ by name instead of by path.
 
 Nothing here is written to disk and nothing needs maintaining: the walk costs
 about half a second over the whole archive, so the index is rebuilt on every
-call rather than cached and left to go stale. What cannot be derived from the
-data -- the tether lengths, your notes -- lives in sessions.toml next to this
-file. The pose/flight clock offset used to live there too; both logs now stamp
-every row with the same wall clock, so it is read off the files instead.
+call rather than cached and left to go stale. Your own notes, and which of a
+handful of old runs came out of the simulator, live in sessions.toml next to
+this file: nothing else can be derived from the data. Geometry comes off
+each session's own config_snapshot.json, and the pose/flight clock offset
+off the wall clock both logs stamp on every row.
 """
 import datetime as _dt
 import os
@@ -23,6 +24,8 @@ import re
 import tomllib
 from functools import cached_property
 from pathlib import Path
+
+import numpy as np
 
 # Root of the archive. Point TARES_DATA elsewhere to work off a copy.
 DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
@@ -91,6 +94,24 @@ def _first(path, column):
     except (ValueError, OSError):
         return None
     return float(d[column].iloc[0]) if len(d) else None
+
+
+def _repair_cur_time(d):
+    """
+    Rebuild cur_time from wall_time where the logged clock is not monotonic.
+
+    Old flight plans reset cur_time to 0 at the start of every leg
+    (fixed in src/comms/control.py). wall_time is stamped alongside it and
+    stays continuous regardless, so it stands in when that happened.
+    """
+    if "cur_time" not in d or "wall_time" not in d or not len(d):
+        return d
+    ct = d["cur_time"].to_numpy(float)
+    if np.all(np.diff(ct) >= -1e-6):
+        return d
+    d = d.copy()
+    d["cur_time"] = d["wall_time"] - d["wall_time"].iloc[0]
+    return d
 
 
 def _clock_epoch(path, elapsed_col):
@@ -166,28 +187,42 @@ class Session:
                 **doc.get("sessions", {}).get(self.id, {})}
 
     @cached_property
-    def pose_offset(self):
-        """Pose clock -> flight clock [s]:  t_flight = t_pose - pose_offset.
-
-        Each log counts from its own start but stamps every row with the same
-        wall clock, so the offset is the difference of the two epochs and
-        there is nothing to measure. Runs recorded before the camera wrote
-        wall_time fall back to sessions.toml, and an entry written there by
-        hand still wins -- that is where a fitted value goes if the residual
-        camera latency ever turns out to matter.
+    def config(self):
         """
-        own = _metadata().get("sessions", {}).get(self.id, {})
-        if "pose_offset" in own:
-            return float(own["pose_offset"])
-        if self.has_camera:
-            e_pose = _clock_epoch(self.pose, "time_s")
-            e_flight = _clock_epoch(self.flight, "cur_time")
-            if e_pose is not None and e_flight is not None:
-                return e_flight - e_pose
-        return float(self.meta.get("pose_offset", 0.0))
+        The exact Prm/config.py values this flight ran with.
+
+        Written by FlightLogger next to the flight log. Prm/config.py
+        changes between experiments, so raise rather than fall back to it
+        for a session recorded before this snapshot existed.
+        """
+        import json
+        path = self.flight.with_name("config_snapshot.json")
+        if not path.exists():
+            raise FileNotFoundError(
+                f"session {self.id} has no config_snapshot.json")
+        with open(path) as f:
+            return json.load(f)
+
+    @cached_property
+    def pose_offset(self):
+        """
+        Pose clock -> flight clock [s]: t_flight = t_pose - pose_offset.
+
+        Both logs stamp every row with the same wall clock, so this is just
+        the difference of the two epochs. Raises for a session with no
+        camera, or that predates wall_time in poses.csv.
+        """
+        if not self.has_camera:
+            raise AttributeError(f"session {self.id} has no camera data")
+        e_pose = _clock_epoch(self.pose, "time_s")
+        e_flight = _clock_epoch(self.flight, "cur_time")
+        if e_pose is None or e_flight is None:
+            raise ValueError(
+                f"session {self.id} predates wall_time in poses.csv")
+        return e_flight - e_pose
 
     def __getattr__(self, name):
-        # session.L_marker, session.note, ... come from sessions.toml
+        # session.note, session.sim, ... come from sessions.toml
         try:
             return self.meta[name]
         except KeyError:
@@ -198,9 +233,9 @@ class Session:
     # -- the data ----------------------------------------------------------
     @cached_property
     def fl(self):
-        """The flight log as a DataFrame."""
+        """The flight log as a DataFrame, with cur_time repaired if needed."""
         import pandas as pd
-        return pd.read_csv(self.flight)
+        return _repair_cur_time(pd.read_csv(self.flight))
 
     @cached_property
     def poses(self):
@@ -217,7 +252,7 @@ class Session:
         out = {"rows": 0, "duration": float("nan"), "modes": "?",
                "alt": float("nan"), "ref": "?",
                "mb": self.flight.stat().st_size / 1e6}
-        wanted = set(_SUMMARY_COLS) | set(_LEGACY_NAMES)
+        wanted = set(_SUMMARY_COLS) | set(_LEGACY_NAMES) | {"wall_time"}
         try:
             d = pd.read_csv(self.flight, usecols=lambda c: c in wanted)
         except Exception:
@@ -225,6 +260,7 @@ class Session:
             return out
         d = d.rename(columns={old: new for old, new in _LEGACY_NAMES.items()
                               if old in d and new not in d})
+        d = _repair_cur_time(d)
         if "cur_time" not in d or not len(d):
             out["modes"] = "empty"
             return out
@@ -244,6 +280,10 @@ class Session:
 LOGGED_STATE_COLS = ("payload_alpha_x", "payload_alpha_y",
                      "payload_alphadot_x", "payload_alphadot_y")
 
+# added after LOGGED_STATE_COLS, so checked separately
+LOGGED_COV_COLS = ("payload_psi_p", "payload_cov_axx", "payload_cov_ayy",
+                   "payload_cov_axy", "payload_cov_psipsi")
+
 
 def has_logged_states(d):
     """Whether the flight computer ran the payload EKF and logged its output.
@@ -255,6 +295,12 @@ def has_logged_states(d):
     """
     return (set(LOGGED_STATE_COLS) <= set(d.columns)
             and bool(d[list(LOGGED_STATE_COLS)].abs().to_numpy().max() > 0))
+
+
+def has_logged_covariance(d):
+    """Whether this log also carries the onboard filter's psi_p and covariance."""
+    return set(LOGGED_COV_COLS) <= set(d.columns) and bool(
+        d[list(LOGGED_COV_COLS)].notna().to_numpy().any())
 
 
 def flown_reference(d):

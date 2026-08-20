@@ -60,18 +60,18 @@ class EKF:
                  sigma_yaw=math.radians(30), # payload yaw noise [rad]
                  sigma_alpha_0=math.radians(30), # initial swing angle 1-sigma [rad]
                  sigma_rate_0=math.radians(30), # initial swing rate 1-sigma [rad/s]
-                 sigma_psi_p_0=math.radians(15)): # initial payload yaw 1-sigma [rad]
+                 sigma_psi_p_0=math.radians(15), # initial payload yaw 1-sigma [rad]
+                 L=None, g=None, geom=None):
 
-        # access constant geometry parrameters from the config. The camera
-        # lever arms live in pre_process, which is what needs them
-        self.L = config.TETHER_LEN
-        self.T_BC = config.CAM_R
-        self.T_CB = self.T_BC.T
-        self.g = config.GRAVITY
-        self.t_BC_B = np.array([config.CAM_OFFSET_X,
-                           config.CAM_OFFSET_Y,
-                           config.CAM_OFFSET_Z])
-        self.l_B = config.TETHER_PIVOT_OFFSET
+        # default to live Prm/config.py; pass these explicitly to replay a
+        # session with its own config_snapshot.json values instead
+        self.L = config.TETHER_LEN if L is None else L
+        self.g = config.GRAVITY if g is None else g
+        self.geom = pp.DEFAULT_GEOMETRY if geom is None else geom
+        self.T_BC = self.geom.T_BC
+        self.T_CB = self.geom.T_CB
+        self.t_BC_B = self.geom.t_BC_B
+        self.l_B = self.geom.l_B
 
         # set noise parameters
         self.q_xy = q_xy
@@ -175,7 +175,7 @@ class EKF:
         """
         Fold in one camera frame
         """
-        z = pp.measurement(frame, T_IB)
+        z = pp.measurement(frame, T_IB, geom=self.geom)
         if z is None:
             return xi, P
 
@@ -218,7 +218,7 @@ class EKF:
         Takes a payload state estimate and calculates the pixel coordinates sized to the camera frame.
         For viewing the estimate overlaid on the recording.
         """
-        L = config.TETHER_LEN
+        L = self.L
         A = self.T_CB @ T_IB.T
 
         q_I = np.array([xi[IX_ALPHA_X], xi[IX_ALPHA_Y], -1])
@@ -246,7 +246,7 @@ class EKF:
         """
         Payload velocity along inertial east and north
         """
-        L = config.TETHER_LEN
+        L = self.L
         alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
 
         # sax, cax = math.sin(alpha_x), math.cos(alpha_x)

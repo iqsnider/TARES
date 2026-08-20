@@ -10,6 +10,8 @@ __pycache__/
 images/
 
 # data
+data/
+*.mp4
 *.avi
 out/
 figs/

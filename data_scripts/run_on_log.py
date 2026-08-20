@@ -43,10 +43,14 @@ def make_ekf(phi, theta, psi, alpha_x, alpha_y, psi_p, **kwargs):
     return filt
 
 
-def run_full(frames, inp, offset):
+def run_full(frames, inp, offset, geom=None):
     """
-    Run the EKF over every camera frame
+    Run the EKF over every camera frame.
+
+    `geom` defaults to pre_process.DEFAULT_GEOMETRY (today's Prm/config.py);
+    pass a session's own instead, from its config_snapshot.json.
     """
+    geom = pp.DEFAULT_GEOMETRY if geom is None else geom
     t_fl = inp["t"]
     filt = None
     t_prev = None
@@ -60,12 +64,13 @@ def run_full(frames, inp, offset):
         a_I = np.array([np.interp(t, t_fl, inp["a_I"][:, k]) for k in range(3)])
 
         if filt is None:
-            init_ekf = pp.swing_angles(frame, ekfm.T_IB_fn(phi, theta, psi))
+            init_ekf = pp.swing_angles(frame, ekfm.T_IB_fn(phi, theta, psi),
+                                       geom=geom)
 
             if init_ekf is None:
                 continue
 
-            filt = make_ekf(phi, theta, psi, *init_ekf)
+            filt = make_ekf(phi, theta, psi, *init_ekf, geom=geom)
             t_prev = t_cam
 
             continue

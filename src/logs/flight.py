@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import time
 from datetime import datetime
@@ -6,8 +7,10 @@ import numpy as np
 
 from pymavlink import mavutil
 
+import Prm.config as config
 
-# TODO later when ArUco system is working add marker detected boolean, marker px coords, estimated range/pose, kalman filter state/covariance/innovation
+
+# TODO later when ArUco system is working add marker detected boolean, marker px coords, estimated range/pose, kalman filter innovation
 # loop_dt is the total time it takes to run the control loop (effectively the time between transmitting setpoints)
 COLUMNS = [
     "wall_time", "cur_time", "cur_loop_dt", "cur_ctrl_freq",
@@ -19,6 +22,9 @@ COLUMNS = [
     "payload_vx_ref", "payload_vy_ref", "payload_vz_ref",
     "payload_alpha_x", "payload_alpha_y",
     "payload_alphadot_x", "payload_alphadot_y",
+    "payload_psi_p",
+    "payload_cov_axx", "payload_cov_ayy", "payload_cov_axy",
+    "payload_cov_psipsi",
     "ux", "uy", "uz", "yaw_ref", "yaw_rate_ref",
     "drone_px_meas", "drone_py_meas", "drone_pz_meas",
     "drone_vx_meas", "drone_vy_meas", "drone_vz_meas",
@@ -36,12 +42,37 @@ COLUMNS = [
 NAN = float("nan")
 
 
+def _config_snapshot():
+    """
+    Every constant Prm/config.py currently defines, as JSON-safe values.
+
+    Prm/config.py changes between experiments, so a copy is filed next to
+    the flight's own data: without it, later analysis would just pick up
+    whatever config.py says now. Only the constants (upper-case module
+    attributes) are kept, not the helper functions or the np import.
+    """
+    out = {}
+    for name, val in vars(config).items():
+        if not name.isupper():
+            continue
+        if isinstance(val, np.ndarray):
+            out[name] = val.tolist()
+        elif val is None or isinstance(val, (int, float, str, bool)):
+            out[name] = val
+    return out
+
+
 class FlightLogger:
     def __init__(self, data_dir="data"):
 
         # make and name the directory
         os.makedirs(data_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # save file with date and time
+
+        # the exact config this flight ran with, in case config.py changes later
+        self.config_path = os.path.join(data_dir, "config_snapshot.json")
+        with open(self.config_path, "w") as f:
+            json.dump(_config_snapshot(), f, indent=2, sort_keys=True)
 
         # make and name the path to the data csv file
         self.path = os.path.join(data_dir, f"flight_{stamp}.csv")
@@ -198,7 +229,8 @@ class FlightLogger:
     def log(self, t, x, p_ref=(NAN,)*3, v_ref=(NAN,)*3, u=(NAN,)*3, *,
             yaw_ref=0, yaw_rate_ref=0,
             payload_p_ref=None, payload_v_ref=None,
-            payload_alpha=None, payload_alphadot=None):
+            payload_alpha=None, payload_alphadot=None,
+            payload_psi_p=None, payload_cov=None):
         """
         Call once per control tick, AFTER send_accel/note_sent.
           t: loop time since start (control loop's `t`)
@@ -206,6 +238,9 @@ class FlightLogger:
           p_ref,v_ref: drone ENU position/velocity references
           u: control output (ux,uy,uz), same frame you pass to the controller (usually the acceleration setpoint)
           payload_*: optional, None until the ArUco/KF payload tracker is online
+          payload_psi_p: payload yaw estimate [rad]
+          payload_cov: (Pxx, Pyy, Pxy, Ppp), the alpha_x/alpha_y/psi_p block
+            of the EKF covariance, not the full state covariance
         """
         # what time is it?
         now = time.time()
@@ -224,6 +259,8 @@ class FlightLogger:
         pl_a = payload_alpha if payload_alpha is not None else (NAN, NAN)
         pl_ad = payload_alphadot if payload_alphadot is not None else (
             NAN, NAN)
+        pl_psi = payload_psi_p if payload_psi_p is not None else NAN
+        pl_cov = payload_cov if payload_cov is not None else (NAN, NAN, NAN, NAN)
         hb_age = now - \
             c["last_hb_wall"] if c["last_hb_wall"] is not None else NAN
 
@@ -249,6 +286,9 @@ class FlightLogger:
             "payload_vx_ref": pl_vr[0], "payload_vy_ref": pl_vr[1], "payload_vz_ref": pl_vr[2],
             "payload_alpha_x": pl_a[0], "payload_alpha_y": pl_a[1],
             "payload_alphadot_x": pl_ad[0], "payload_alphadot_y": pl_ad[1],
+            "payload_psi_p": pl_psi,
+            "payload_cov_axx": pl_cov[0], "payload_cov_ayy": pl_cov[1],
+            "payload_cov_axy": pl_cov[2], "payload_cov_psipsi": pl_cov[3],
             # control input
             "ux": u[0], "uy": u[1], "uz": u[2],
             "yaw_ref": yaw_ref, "yaw_rate_ref": yaw_rate_ref,

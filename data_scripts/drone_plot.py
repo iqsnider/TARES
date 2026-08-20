@@ -95,7 +95,7 @@ def _has(df, *cols):
     return all(c in df and df[c].notna().any() for c in cols)
 
 
-def payload_enu(df):
+def payload_enu(df, L=None):
     """Payload position and velocity in ENU from the states the aircraft logged.
 
     Nothing is estimated here. The onboard EKF wrote its swing state into
@@ -110,7 +110,7 @@ def payload_enu(df):
     the payload states the run was actually closed around, not a
     reconstruction of them.
     """
-    L = config.TETHER_LEN
+    L = config.TETHER_LEN if L is None else L
     p = np.c_[df["drone_px_meas"] + L*df["payload_alpha_x"],
               df["drone_py_meas"] + L*df["payload_alpha_y"],
               df["drone_pz_meas"] - L]
@@ -267,12 +267,12 @@ def velocity_plot(df, t_takeover, save=None):
         fig.savefig(save, dpi=110)
 
 
-def payload_position_plot(df, t_takeover, save=None):
+def payload_position_plot(df, t_takeover, save=None, L=None):
     """
     Plot 3.1: Payload position vs time, against the reference it was tracking
     """
     t = df["cur_time"].to_numpy()
-    p, _ = payload_enu(df)
+    p, _ = payload_enu(df, L=L)
 
     fig, ax = plt.subplots(figsize=(11, 5))
 
@@ -299,12 +299,12 @@ def payload_position_plot(df, t_takeover, save=None):
         fig.savefig(save, dpi=110)
 
 
-def payload_velocity_plot(df, t_takeover, save=None):
+def payload_velocity_plot(df, t_takeover, save=None, L=None):
     """
     Plot 3.2: Payload velocity vs time, against the reference it was tracking
     """
     t = df["cur_time"].to_numpy()
-    _, v = payload_enu(df)
+    _, v = payload_enu(df, L=L)
 
     fig, ax = plt.subplots(figsize=(11, 5))
 
@@ -468,14 +468,14 @@ def trajectory_plot(df, save=None):
         fig.savefig(save, dpi=110)
 
 
-def payload_trajectory_plot(df, save=None):
+def payload_trajectory_plot(df, save=None, L=None):
     """
     Plot 7.1: East-North trajectory of the payload, colored by flight mode,
     with the payload reference. Counterpart of trajectory_plot -- on a payload
     run this is the plan view that matters, because the thing being put
     somewhere is the payload and the drone only goes where it must to do it.
     """
-    p, _ = payload_enu(df)
+    p, _ = payload_enu(df, L=L)
     E, N = p[:, 0], p[:, 1]
 
     fig, ax = plt.subplots(figsize=(7.5, 7.5))
@@ -513,7 +513,7 @@ def _set_equal_3d(ax, X, Y, Z):
     except Exception:
         pass
 
-def trajectory_plot_3d(df, save=None):
+def trajectory_plot_3d(df, save=None, L=None):
     """
     3D East-North-Up trajectory of the drone, colored by flight mode, with the
     reference trajectory overlaid. 3D counterpart of trajectory_plot.
@@ -536,7 +536,7 @@ def trajectory_plot_3d(df, save=None):
 
     box = [np.append(E, 0), np.append(N, 0), np.append(U, 0)]
     if catalog.has_logged_states(df):
-        p, _ = payload_enu(df)
+        p, _ = payload_enu(df, L=L)
         ax.plot(p[:, 0], p[:, 1], p[:, 2], color=C_PAYLOAD, lw=1.6,
                 label="payload (onboard EKF)")
         if _has(df, "payload_px_ref", "payload_py_ref", "payload_pz_ref"):
@@ -560,8 +560,13 @@ def trajectory_plot_3d(df, save=None):
     if save:
         fig.savefig(save, dpi=110)
 
-def plot_suite(df, target_hz=50, save=None, stem="flight"):
-    """Every log plot, in one call. `save` is a directory, or None to show."""
+def plot_suite(df, target_hz=50, save=None, stem="flight", L=None):
+    """
+    Every log plot, in one call. `save` is a directory, or None to show.
+
+    `L` is the tether length for the payload track, pass session.config
+    ["TETHER_LEN"] rather than the live Prm/config.py default.
+    """
     t_takeover, mask = guided_window(df)
     if t_takeover is None:
         print("No manual takeover detected; using full flight.")
@@ -584,14 +589,14 @@ def plot_suite(df, target_hz=50, save=None, stem="flight"):
     rc_plot(df, t_takeover, save=out("rc"))
     # servo_plot(df, t_takeover, save=out("servo"))
     trajectory_plot(df, save=out("trajectory"))
-    trajectory_plot_3d(df, save=out("trajectory_3d"))
+    trajectory_plot_3d(df, save=out("trajectory_3d"), L=L)
 
     # only runs that flew the filter onboard have a payload to draw; on the
     # rest the columns are there but empty, and there is nothing to say
     if catalog.has_logged_states(df):
-        payload_position_plot(df, t_takeover, save=out("payload_position"))
-        payload_velocity_plot(df, t_takeover, save=out("payload_velocity"))
-        payload_trajectory_plot(df, save=out("payload_trajectory"))
+        payload_position_plot(df, t_takeover, save=out("payload_position"), L=L)
+        payload_velocity_plot(df, t_takeover, save=out("payload_velocity"), L=L)
+        payload_trajectory_plot(df, save=out("payload_trajectory"), L=L)
     else:
         print("No onboard payload states in this log; payload plots skipped.")
 

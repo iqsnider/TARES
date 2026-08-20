@@ -18,26 +18,19 @@ import csv
 import pandas as pd
 
 import Prm.config as config
+import sim.estimation.pre_process as pp
 from sim.estimation.pre_process import get_payload_center_in_camera_frame
 
 
-def get_payload_center_in_drone_frame(payload_center_in_camera_frame):
+def get_payload_center_in_drone_frame(payload_center_in_camera_frame, geom=pp.DEFAULT_GEOMETRY):
     """
     Computes the payload position in the drone reference frame from the payload center in the camera frame and the given camera offset
     """
     if payload_center_in_camera_frame is None:
         return None
 
-    # camera translation
-    t = np.array([config.CAM_OFFSET_X, config.CAM_OFFSET_Y, config.CAM_OFFSET_Z])
-
-    # camera rotation
-    rot = config.CAM_R @ np.asarray(payload_center_in_camera_frame)
-
-    # position in drone frame
-    payload_center_in_drone_frame = rot + t
-
-    return payload_center_in_drone_frame
+    # position in drone frame: camera rotation, then camera translation
+    return geom.T_BC @ np.asarray(payload_center_in_camera_frame) + geom.t_BC_B
 
 
 def get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_position_attitude):
@@ -75,26 +68,33 @@ def get_attitude_at(drone_df, time_s, time_offset=0):
     return drone_df.loc[i]
 
 
-def get_payload_position_ENU(frame, drone_position_attitude):
+def get_payload_position_ENU(frame, drone_position_attitude, geom=pp.DEFAULT_GEOMETRY):
     """
     Computes the payload position in the inertial frame ENU
     """
-    detection = get_payload_center_in_camera_frame(frame)
+    detection = get_payload_center_in_camera_frame(frame, geom=geom)
     if detection is None:
         return None
     payload_center_in_camera_frame, _ = detection
-    payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame)
+    payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame, geom=geom)
     payload_center_in_inertial_frame = get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_position_attitude)
 
     return payload_center_in_inertial_frame
 
 
-def get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=0):
+def get_payload_ENU_from_data(payload_pose_file, flight_data, time_offset=0,
+                              geom=pp.DEFAULT_GEOMETRY, control_freq=None):
     """
     Returns a dataframe with the same size as the flight data file so that the two can be graphed together later
+
+    `flight_data` takes a path or an already-loaded DataFrame. Pass `geom`
+    and `control_freq` from a session's config_snapshot.json when analyzing
+    old data instead of leaving them on today's Prm/config.py default.
     """
+    control_freq = config.CONTROL_FREQUENCY if control_freq is None else control_freq
     payload_df = pd.read_csv(payload_pose_file)
-    drone_df = pd.read_csv(flight_data_file).reset_index(drop=True)
+    drone_df = (flight_data if isinstance(flight_data, pd.DataFrame)
+                else pd.read_csv(flight_data)).reset_index(drop=True)
 
     out = pd.DataFrame(np.nan, index=drone_df.index, columns=["payload_e", "payload_n", "payload_u",
                                                               "n_markers", "cam_time_s"])
@@ -108,10 +108,10 @@ def get_payload_ENU_from_data(payload_pose_file, flight_data_file, time_offset=0
         # nearest flight-log row to this camera frame, if one is close enough
         dt = np.abs(flight_time - (cam_time - time_offset))
         i = int(dt.argmin())
-        if dt[i] > 1/config.CONTROL_FREQUENCY:
+        if dt[i] > 1/control_freq:
             continue
 
-        payload_enu = get_payload_position_ENU(frame, drone_df.iloc[i])
+        payload_enu = get_payload_position_ENU(frame, drone_df.iloc[i], geom=geom)
         if payload_enu is None:
             continue
 
