@@ -33,6 +33,7 @@ class _FrameGrabber(threading.Thread):
         self._frame = None
         self._seq = 0
         self._stopped = False
+        self.dropped = 0            # empty/corrupt buffers from cap.read()
 
     def run(self):
         fails = 0
@@ -47,6 +48,7 @@ class _FrameGrabber(threading.Thread):
                     ok, frame = False, None
                 if not ok or frame is None or frame.size == 0:
                     fails += 1
+                    self.dropped += 1
                     if fails > 50:                # sustained failure = real stop
                         break
                     time.sleep(0.005)
@@ -584,9 +586,12 @@ class MarkerPoseRecorder:
 
     def close(self):
         # stop pulling new frames first, then drain what's already queued
+        grabbed_ok = dropped = 0
         if self._grabber is not None:
             self._grabber.stop()
             self._grabber.join(timeout=1)
+            grabbed_ok = self._grabber._seq
+            dropped = self._grabber.dropped
             self._grabber = None
         if self._preview is not None:
             self._preview.stop()
@@ -616,6 +621,11 @@ class MarkerPoseRecorder:
                   f"(video header says {self.fps:g} fps -- "
                   f"playback speed is only correct if these match; "
                   f"CSV time_s is the ground truth)")
+            attempted = grabbed_ok + dropped
+            if dropped:
+                pct = 100*dropped/attempted if attempted else 0
+                print(f"dropped {dropped} of {attempted} frames at the camera "
+                      f"read ({pct:.0f}%) -- empty/corrupt buffers, not a code error")
 
     # context-manager support
     def __enter__(self):

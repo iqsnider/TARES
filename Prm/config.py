@@ -80,12 +80,12 @@ def Rz(a): c, s = np.cos(a), np.sin(a); return np.array(
 
 _cam_roll_by_airframe = {"AURELIA_X4": 0, "IF1200": 0}
 _cam_pitch_by_airframe = {"AURELIA_X4": 0, "IF1200": 0}
+_cam_yaw_by_airframe = {"AURELIA_X4": PI/2, "IF1200": PI}
 # rad, about the nose axis (+Y, front)
 CAM_ROLL = _cam_roll_by_airframe[AIRFRAME]
 # rad, about the lateral axis (+X, starboard)
 CAM_PITCH = _cam_pitch_by_airframe[AIRFRAME]
 # rad, about vertical axis (+Z, top), right hand rule (0 when up on the camera frame is in the drone nose direction)
-_cam_yaw_by_airframe = {"AURELIA_X4": PI/2, "IF1200": PI}
 CAM_YAW = _cam_yaw_by_airframe[AIRFRAME]
 
 # camera at zero rpy stares straight down, top of the image toward the nose
