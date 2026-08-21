@@ -4,8 +4,7 @@ PI = np.pi
 GRAVITY = 9.81  # [m/s^2]
 
 # which physical airframe is currently mounted. Selects every per-airframe
-# value below; only what's the same on both rigs stays a bare constant.
-AIRFRAME = "IF1200"  # or "AURELIA_X4"
+AIRFRAME = "AURELIA_X4"  # or "AURELIA_X4"
 
 ##### drone parameters #####
 
@@ -27,8 +26,10 @@ _k_m_by_airframe = {"AURELIA_X4": 0.02, "IF1200": 0.02}
 K_M = _k_m_by_airframe[AIRFRAME]
 
 ###### payload parameters #####
-MASS_TETHER = 0.68  # [kg]
-_mass_payload_by_airframe = {"AURELIA_X4": 1.13, "IF1200": 8.6}  # [kg]
+_mass_tether_by_airframe = {"AURELIA_X4": 0.68,
+                            "IF1200": 0.9}  # [kg]
+MASS_TETHER = _mass_tether_by_airframe[AIRFRAME]  # [kg]
+_mass_payload_by_airframe = {"AURELIA_X4": 1.13, "IF1200": 6.0}  # [kg]
 MASS_PAYLOAD = _mass_payload_by_airframe[AIRFRAME]
 DISC_DIAMETER = 0.3  # [m]
 DISC_WIDTH = 0.0025  # [m]
@@ -48,7 +49,7 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 # settings
 CAM_GAIN = 1
-_cam_exp_abs_by_airframe = {"AURELIA_X4": 8, "IF1200": 7}
+_cam_exp_abs_by_airframe = {"AURELIA_X4": 9, "IF1200": 3}
 CAM_EXP_ABS = _cam_exp_abs_by_airframe[AIRFRAME]
 CAM_PREVIEW_PORT = None
 CAM_FPS = 48
@@ -128,19 +129,19 @@ LQR_DRONE_Q_VEL_Z = _lqr_drone_q_vel_z_by_airframe[AIRFRAME]
 LQR_DRONE_R_ACC = _lqr_drone_r_acc_by_airframe[AIRFRAME]
 
 # payload outer loop (OuterLoopPayloadLQR)
-_lqr_payload_w_pos_xy_by_airframe = {"AURELIA_X4": 1, "IF1200": (1/1.2)**2}
-_lqr_payload_w_pos_z_by_airframe = {"AURELIA_X4": 1, "IF1200": (1/1.2)**2}
+_lqr_payload_w_pos_xy_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
+_lqr_payload_w_pos_z_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
 _lqr_payload_tuning_const_by_airframe = {
-    "AURELIA_X4": 1/1**2, "IF1200": 1/1**2}
+    "AURELIA_X4": (1/1)**2, "IF1200": (1/1)**2}
 LQR_PAYLOAD_W_POS_XY = _lqr_payload_w_pos_xy_by_airframe[AIRFRAME]
 LQR_PAYLOAD_W_POS_Z = _lqr_payload_w_pos_z_by_airframe[AIRFRAME]
 LQR_PAYLOAD_TUNING_CONST = _lqr_payload_tuning_const_by_airframe[AIRFRAME]
 
 # payload outer loop with integral action (OuterLoopPayloadLQI)
-_lqi_payload_w_pos_xy_by_airframe = {"AURELIA_X4": 1, "IF1200": (1/1.5)**2}
-_lqi_payload_w_pos_z_by_airframe = {"AURELIA_X4": 1, "IF1200": (1/1.5)**2}
-_lqi_payload_w_int_xy_by_airframe = {"AURELIA_X4": 1/4, "IF1200": (1/8)**2}
-_lqi_payload_w_int_z_by_airframe = {"AURELIA_X4": 1/4, "IF1200": (1/8)**2}
+_lqi_payload_w_pos_xy_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
+_lqi_payload_w_pos_z_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
+_lqi_payload_w_int_xy_by_airframe = {"AURELIA_X4": (1/4)**2, "IF1200": (1/8)**2}
+_lqi_payload_w_int_z_by_airframe = {"AURELIA_X4": (1/4)**2, "IF1200": (1/8)**2}
 _lqi_payload_tuning_const_by_airframe = {
     "AURELIA_X4": (1/1)**2, "IF1200": (1/1)**2}
 LQI_PAYLOAD_W_POS_XY = _lqi_payload_w_pos_xy_by_airframe[AIRFRAME]

@@ -45,11 +45,6 @@ NAN = float("nan")
 def _config_snapshot():
     """
     Every constant Prm/config.py currently defines, as JSON-safe values.
-
-    Prm/config.py changes between experiments, so a copy is filed next to
-    the flight's own data: without it, later analysis would just pick up
-    whatever config.py says now. Only the constants (upper-case module
-    attributes) are kept, not the helper functions or the np import.
     """
     out = {}
     for name, val in vars(config).items():
