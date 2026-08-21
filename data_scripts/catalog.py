@@ -201,7 +201,8 @@ class Session:
             raise FileNotFoundError(
                 f"session {self.id} has no config_snapshot.json")
         with open(path) as f:
-            return json.load(f)
+            snap = json.load(f)
+        return snap
 
     @cached_property
     def pose_offset(self):
@@ -219,7 +220,8 @@ class Session:
         if e_pose is None or e_flight is None:
             raise ValueError(
                 f"session {self.id} predates wall_time in poses.csv")
-        return e_flight - e_pose
+        offset = e_flight - e_pose
+        return offset
 
     def __getattr__(self, name):
         # session.note, session.sim, ... come from sessions.toml
@@ -235,7 +237,8 @@ class Session:
     def fl(self):
         """The flight log as a DataFrame, with cur_time repaired if needed."""
         import pandas as pd
-        return _repair_cur_time(pd.read_csv(self.flight))
+        fl = _repair_cur_time(pd.read_csv(self.flight))
+        return fl
 
     @cached_property
     def poses(self):
@@ -293,14 +296,18 @@ def has_logged_states(d):
     leave them at zero, because nothing was filling them. Read off the data
     rather than configured, the same way `flown_reference` is.
     """
-    return (set(LOGGED_STATE_COLS) <= set(d.columns)
-            and bool(d[list(LOGGED_STATE_COLS)].abs().to_numpy().max() > 0))
+    if not set(LOGGED_STATE_COLS) <= set(d.columns):
+        return False
+    vals = d[list(LOGGED_STATE_COLS)].abs().to_numpy()
+    has_states = bool(np.isfinite(vals).any() and np.nanmax(vals) > 0)
+    return has_states
 
 
 def has_logged_covariance(d):
     """Whether this log also carries the onboard filter's psi_p and covariance."""
-    return set(LOGGED_COV_COLS) <= set(d.columns) and bool(
-        d[list(LOGGED_COV_COLS)].notna().to_numpy().any())
+    has_cov = (set(LOGGED_COV_COLS) <= set(d.columns)
+              and bool(d[list(LOGGED_COV_COLS)].notna().to_numpy().any()))
+    return has_cov
 
 
 def flown_reference(d):

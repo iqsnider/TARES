@@ -25,22 +25,24 @@ class Geometry:
 
     @property
     def T_CB(self):
-        return self.T_BC.T
+        t_cb = self.T_BC.T
+        return t_cb
 
     @classmethod
     def from_config(cls, cfg=config):
-        return cls(
+        geom = cls(
             marker_offset={cfg.LEFT_MARKER_ID: cfg.MARKER_CENTER_TO_CENTER_DIST,
                           cfg.CENTER_MARKER_ID: 0,
                           cfg.RIGHT_MARKER_ID: -cfg.MARKER_CENTER_TO_CENTER_DIST},
             T_BC=np.asarray(cfg.CAM_R, dtype=float),
             t_BC_B=np.array([cfg.CAM_OFFSET_X, cfg.CAM_OFFSET_Y, cfg.CAM_OFFSET_Z]),
             l_B=np.asarray(cfg.TETHER_PIVOT_OFFSET, dtype=float))
+        return geom
 
     @classmethod
     def from_snapshot(cls, snap):
         """From a session's config_snapshot.json (see catalog.Session.config)."""
-        return cls(
+        geom = cls(
             marker_offset={snap["LEFT_MARKER_ID"]: snap["MARKER_CENTER_TO_CENTER_DIST"],
                           snap["CENTER_MARKER_ID"]: 0,
                           snap["RIGHT_MARKER_ID"]: -snap["MARKER_CENTER_TO_CENTER_DIST"]},
@@ -48,6 +50,7 @@ class Geometry:
             t_BC_B=np.array([snap["CAM_OFFSET_X"], snap["CAM_OFFSET_Y"],
                              snap["CAM_OFFSET_Z"]]),
             l_B=np.array(snap["TETHER_PIVOT_OFFSET"], dtype=float))
+        return geom
 
 
 # default for live call sites that don't pass their own geometry
@@ -98,7 +101,8 @@ def get_payload_center_in_camera_frame(frame, geom=DEFAULT_GEOMETRY):
                 (marker.x, marker.y, marker.z))
                for marker in frame.dropna(subset=["marker_id"]).itertuples()]
 
-    return center_from_records(records, geom=geom)
+    center = center_from_records(records, geom=geom)
+    return center
 
 
 def shift_origin(pC_ctr, geom=DEFAULT_GEOMETRY):
@@ -159,7 +163,8 @@ def measurement(frame, T_IB, geom=DEFAULT_GEOMETRY):
     if detection is None:
         return None
 
-    return _build_z(detection, T_IB, geom=geom)
+    z = _build_z(detection, T_IB, geom=geom)
+    return z
 
 
 def measurement_from_poses(poses, T_IB, geom=DEFAULT_GEOMETRY):
@@ -178,7 +183,8 @@ def measurement_from_poses(poses, T_IB, geom=DEFAULT_GEOMETRY):
     if detection is None:
         return None
 
-    return _build_z(detection, T_IB, geom=geom)
+    z = _build_z(detection, T_IB, geom=geom)
+    return z
 
 
 def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):
@@ -192,8 +198,9 @@ def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):
 
     b = shift_origin(p_ctr_C, geom=geom)
     alpha_x, alpha_y = alpha_from_q_I(T_IB @ (geom.T_BC @ b))
+    psi_p = payload_yaw(mC, T_IB, geom=geom)
 
-    return alpha_x, alpha_y, payload_yaw(mC, T_IB, geom=geom)
+    return alpha_x, alpha_y, psi_p
 
 
 def marker_bearings(frame, geom=DEFAULT_GEOMETRY):

@@ -12,6 +12,7 @@ two comes off the files themselves (see `catalog.Session.pose_offset`). A run
 recorded before poses.csv carried wall_time has no offset and cannot be run
 through this.
 """
+import colorsys
 import json
 from pathlib import Path
 
@@ -23,9 +24,9 @@ import matplotlib.pyplot as plt
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
-from sim.plotting import (TimeSlider, configure_plot_style,
-                          C_REF, C_DRONE, C_PAYLOAD)
+from sim.plotting import TimeSlider, configure_plot_style, C_REF, C_PAYLOAD
 import catalog
+import drone_plot
 from run_on_log import build_inputs, group_frames, make_ekf, run_full
 
 configure_plot_style()   # shared serif / Computer Modern theme
@@ -149,8 +150,9 @@ def _records_frame(records):
     The columns a timeseries plot needs, off records shaped like
     `run_full`'s or `logged_records`'s output.
     """
-    return pd.DataFrame([{k: v for k, v in r.items() if k in _R_COLS}
-                         for r in records])
+    df = pd.DataFrame([{k: v for k, v in r.items() if k in _R_COLS}
+                       for r in records])
+    return df
 
 
 def summarise(records, meas_df):
@@ -201,8 +203,11 @@ def flown_reference(fl):
 
 
 def _set_equal_3d(ax, X, Y, Z):
-    r = max(np.ptp(X), np.ptp(Y), np.ptp(Z)) / 2 or 1.0
-    cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
+    xmin, xmax = np.nanmin(X), np.nanmax(X)
+    ymin, ymax = np.nanmin(Y), np.nanmax(Y)
+    zmin, zmax = np.nanmin(Z), np.nanmax(Z)
+    r = max(xmax-xmin, ymax-ymin, zmax-zmin) / 2 or 1.0
+    cx, cy, cz = (xmax+xmin)/2, (ymax+ymin)/2, (zmax+zmin)/2
     ax.set_xlim(cx-r, cx+r)
     ax.set_ylim(cy-r, cy+r)
     ax.set_zlim(cz-r, cz+r)
@@ -210,6 +215,19 @@ def _set_equal_3d(ax, X, Y, Z):
         ax.set_box_aspect((1, 1, 1))
     except Exception:
         pass
+
+
+def _mode_lines(ax, fl, E, N, U, lw=2.0):
+    """Drone track split into flight-mode runs, colored like drone_plot's."""
+    lines, seen = [], set()
+    for i, j, mode in drone_plot._mode_runs(fl):
+        color = drone_plot.MODE_SHADING.get(mode, ("0.7", 0))[0]
+        sl = slice(i, min(j + 2, len(fl)))
+        lbl = f"Drone ({mode})" if mode not in seen else None
+        ln, = ax.plot(E[sl], N[sl], U[sl], color=color, lw=lw, label=lbl)
+        lines.append(ln)
+        seen.add(mode)
+    return lines
 
 
 def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True,
@@ -233,7 +251,7 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True,
 
     fig = plt.figure(figsize=(9.5, 8.5))
     ax = fig.add_subplot(111, projection="3d")
-    drone_ln, = ax.plot(E, N, U, color=C_DRONE, lw=2.0, label="Drone")
+    drone_lns = _mode_lines(ax, fl, E, N, U)
 
     # whichever of the two references this run was flying, so a payload-
     # tracking run is not silently drawn against an empty drone reference
@@ -286,9 +304,12 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True,
                   np.concatenate([N, pN[finite], est_enu[:, 1], ref_ok[:, 1]]),
                   np.concatenate([U, pU[finite], est_enu[:, 2], ref_ok[:, 2]]))
 
+    # one legend entry per mode, not one per segment
+    labeled_drone_lns = [ln for ln in drone_lns if not ln.get_label().startswith("_")]
+
     # same running order as the simulation figure, which draws its artists in
     # a different sequence than this one does
-    order = [ref_ln, drone_ln, meas_ln, est_ln,
+    order = [ref_ln, *labeled_drone_lns, meas_ln, est_ln,
              tethers[0] if tethers else None, live_tether, start_pt, head]
     ax.legend(handles=[h for h in order if h is not None],
               fontsize=13.5, loc="upper left")
@@ -299,7 +320,9 @@ def plot_3d(fl, payload_df, est_t, est_enu, save=None, slider=True,
 
     if slider:
         s = TimeSlider(fig, t, label="flight time [s]")
-        s.line(drone_ln, np.c_[E, N, U])
+        for (i, j, mode), ln in zip(drone_plot._mode_runs(fl), drone_lns):
+            sl = slice(i, min(j + 2, len(fl)))
+            s.line(ln, np.c_[E, N, U][sl], t[sl])
         s.line(meas_ln, np.c_[pE, pN, pU], payload_df.cur_time.to_numpy())
         s.line(est_ln, est_enu, est_t)
         s.marker(head, np.c_[E, N, U])
@@ -419,6 +442,76 @@ def _label(frame, c, lines, color=BGR_EST, gap=14, scale=1.15, thick=3):
         cv2.putText(frame, text, at, font, scale, (0, 0, 0), thick + 3,
                     cv2.LINE_AA)
         cv2.putText(frame, text, at, font, scale, color, thick, cv2.LINE_AA)
+
+
+def _hex_to_bgr(color):
+    """Matplotlib color string (hex, or a grayscale level like "0.7") to BGR."""
+    if color.startswith("#"):
+        r, g, b = (int(color[i:i+2], 16) for i in (1, 3, 5))
+        bgr = (b, g, r)
+        return bgr
+    v = round(float(color)*255)
+    bgr = (v, v, v)
+    return bgr
+
+
+def _vivid(bgr):
+    """Same hue as `bgr`, at full saturation and brightness.
+
+    The plot colors (MODE_SHADING) are muted, meant for translucent shading;
+    this pops on video while staying visibly the same color as the plots.
+    """
+    b, g, r = bgr
+    h, _, _ = colorsys.rgb_to_hsv(r/255, g/255, b/255)
+    r, g, b = colorsys.hsv_to_rgb(h, 1, 1)
+    vivid_bgr = (round(b*255), round(g*255), round(r*255))
+    return vivid_bgr
+
+
+def _mode_by_frame(session):
+    """Flight mode at each camera frame, nearest sample in flight time."""
+    frames = session.poses.groupby("frame").time_s.first()
+    t_flight = frames.to_numpy(float) - session.pose_offset
+    fl = session.fl
+    t_fl = fl.cur_time.to_numpy()
+    modes = fl.echoed_mode.astype(str).to_numpy()
+    idx = np.searchsorted(t_fl, t_flight).clip(1, len(t_fl) - 1)
+    idx -= (t_flight - t_fl[idx - 1]) < (t_fl[idx] - t_flight)
+    by_frame = dict(zip(frames.index.astype(int), modes[idx]))
+    return by_frame
+
+
+def _corner_text(frame, lines, corner, color=(255, 255, 255), scale=1, thick=2, margin=12):
+    """Draw `lines` anchored to a fixed screen corner, outlined for legibility."""
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    step = int(30*scale)
+    widths = [cv2.getTextSize(s, font, scale, thick)[0][0] for s in lines]
+    right = corner == "right"
+    for k, (text, width) in enumerate(zip(lines, widths)):
+        x = frame.shape[1] - margin - width if right else margin
+        y = margin + step*(k+1)
+        cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 3,
+                    cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
+
+
+def _config_summary_lines(cfg):
+    """Airframe/tether/mass/controller-cost readout for a session's config_snapshot.json."""
+    def g(key, fmt="{:.2f}"):
+        v = cfg.get(key)
+        text = fmt.format(v) if v is not None else "n/a"
+        return text
+    lines = [
+        f"airframe {cfg.get('AIRFRAME', 'n/a')}",
+        f"controller {cfg.get('CONTROLLER', 'n/a')}",
+        f"tether {g('TETHER_LEN')} m",
+        f"drone mass {g('MASS_DRONE')} kg",
+        f"payload mass {g('MASS_PAYLOAD')} kg",
+        f"LQR w_xy={g('LQR_PAYLOAD_W_POS_XY', '{:.3f}')} "
+        f"w_z={g('LQR_PAYLOAD_W_POS_Z', '{:.3f}')} "
+        f"tune={g('LQR_PAYLOAD_TUNING_CONST', '{:.3f}')}",
+    ]
+    return lines
 
 
 def logged_records(session):
@@ -567,14 +660,19 @@ def velocity_tip_px(r, p_drone, v_drone, filt, K, D, lead_s=LEAD_S):
     return project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
 
 
-def reference_pixels(session, records, filt, K, D, stride=5):
+def reference_pixels(session, records, filt, K, D, stride=5, truncate=False):
     """{frame: (path stretches, the point being tracked right now, error [m])}.
 
-    The reference is a track through the world, so it is drawn as one: the
-    whole thing projected into every frame, with the sample the controller was
-    chasing at that instant marked on it. Both move about the picture as the
-    drone flies, and where the payload sits against them is the tracking error
-    the camera can actually show. Empty when the run flew no reference.
+    The reference is a track through the world, so it is drawn as one, with
+    the sample the controller was chasing at that instant marked on it. Both
+    move about the picture as the drone flies, and where the payload sits
+    against them is the tracking error the camera can actually show. Empty
+    when the run flew no reference.
+
+    With `truncate`, only the reference up to the current frame is drawn --
+    for a stick test the "future" of the reference does not exist yet, it is
+    wherever the pilot moves the stick next, so drawing the whole track like
+    a planned flight would show a path that was never really there.
 
     The error is the straight-line distance in ENU from that sample to where
     the filter puts the payload, measured in the world rather than off the
@@ -590,12 +688,17 @@ def reference_pixels(session, records, filt, K, D, stride=5):
     p_drone, _ = drone_states(session.fl, records)
     # the whole path is redrawn every frame, so it is thinned first; the log
     # runs at 50 Hz and the reference crawls, well under a pixel per sample
-    path = ref_xyz[::stride]
+    path_full = ref_xyz[::stride]
 
     out = {}
     for k, r in enumerate(records):
         here = np.array([np.interp(r["t_flight"], t, ref_xyz[:, c])
                          for c in range(3)])
+        if truncate:
+            cutoff = np.searchsorted(t, r["t_flight"], side="right")
+            path = ref_xyz[:cutoff][::stride]
+        else:
+            path = path_full
         uv = project_enu(np.vstack([path, here]), p_drone[k], r["T_IB"],
                          filt, K, D)
         gap = np.linalg.norm(payload_enu(r, p_drone[k], filt) - here)
@@ -620,8 +723,14 @@ def overlay_video(session, records, save=None, n_sigma=2):
     carries no covariance -- get the dot without the ellipse. The geometry
     used to project the estimate into pixels comes from the session's own
     config_snapshot.json (session.config), not the live Prm/config.py.
+
+    The current flight mode is drawn top-left, colored like the mode-shaded
+    plots (drone_plot.MODE_SHADING). The session's tether length, drone/
+    payload mass, and payload LQR costs are drawn top-right.
     """
     geom = pp.Geometry.from_snapshot(session.config)
+    mode_by_frame = _mode_by_frame(session)
+    config_lines = _config_summary_lines(session.config)
     src = find_recording(session)
     if src is None:
         raise SystemExit(f"session {session.id} has no recording next to "
@@ -656,13 +765,22 @@ def overlay_video(session, records, save=None, n_sigma=2):
             drawn[r["frame"]] = (center, axes, angle,
                                  velocity_tip_px(r, p_drone[k], v_drone[k],
                                                  filt, K, D))
-    ref = reference_pixels(session, records, filt, K, D)
+    ref = reference_pixels(session, records, filt, K, D,
+                           truncate="stick" in session.label.lower())
 
     i = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
+
+        mode = mode_by_frame.get(i)
+        if mode is not None:
+            mode_color = _vivid(_hex_to_bgr(
+                drone_plot.MODE_SHADING.get(mode, ("0.7", 0))[0]))
+            _corner_text(frame, [mode], "left", color=mode_color, scale=2, thick=4)
+        _corner_text(frame, config_lines, "right")
+
         # under the estimate: where the payload is beats where it should be
         line = ref.get(i)
         at_ref = None

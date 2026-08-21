@@ -169,7 +169,7 @@ class OuterLoopPayloadLQI:
                  w_pos_xy=None, w_pos_z=None,
                  w_int_xy=None, w_int_z=None,
                  tuning_const=None,
-                 e_band=None):
+                 e_band=None, u_i_max=None):
         w_pos_xy = config.LQI_PAYLOAD_W_POS_XY if w_pos_xy is None else w_pos_xy
         w_pos_z = config.LQI_PAYLOAD_W_POS_Z if w_pos_z is None else w_pos_z
         w_int_xy = config.LQI_PAYLOAD_W_INT_XY if w_int_xy is None else w_int_xy
@@ -177,6 +177,7 @@ class OuterLoopPayloadLQI:
         tuning_const = (config.LQI_PAYLOAD_TUNING_CONST if tuning_const is None
                         else tuning_const)
         e_band = config.LQI_PAYLOAD_E_BAND if e_band is None else e_band
+        u_i_max = config.LQI_PAYLOAD_U_I_MAX if u_i_max is None else u_i_max
         L = config.TETHER_LEN
         A, B = self._build_system()
         C = np.zeros((3, 10))
@@ -215,17 +216,22 @@ class OuterLoopPayloadLQI:
         self.R = R
 
         self.e_band = e_band
+        self.u_i_max = u_i_max
 
     def compute_u(self, state_err):
         dt = 1/config.CONTROL_FREQUENCY
 
         y_err = self.C @ state_err[self.OUTER_STATES]
 
-        # integration and anti-windup
+        # stop accumulating once error is too large, or once accumulating
+        # further would push the integral term's own contribution past its cap
         if np.linalg.norm(y_err[:2]) < self.e_band:
-            self.xi += y_err*dt
+            xi_trial = self.xi + y_err*dt
+            if np.linalg.norm(self.Ki @ xi_trial) <= self.u_i_max:
+                self.xi = xi_trial
 
-        return -self.K @ state_err - self.Ki @ self.xi
+        u = -self.K @ state_err - self.Ki @ self.xi
+        return u
 
     def reset(self):
         self.xi[:] = 0
@@ -333,7 +339,6 @@ class ArduPilotFlightController:
 
         # thrust calculation
         C_Sigma = m*np.sqrt(a1**2 + a2**2 + (a3 + g)**2)
-        C_Sigma = min(C_Sigma, config.C_SIGMA_MAX)
 
         # acceleration transform
         theta_s = a1*m/C_Sigma

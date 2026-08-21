@@ -538,6 +538,34 @@ def plot_ekf_states(ts, X, xi_log, var_log=None,
     return fig
 
 
+def plot_integrator_state(ts, integral_log, u_i_max=None,
+                          title='Outer-Loop Integral Term',
+                          save_dir=None, fname='integrator_state'):
+    """Show the LQI outer loop's integral term doing (or not doing) anything.
+
+    `integral_log` is the integral term's own contribution to u [m/s^2] over
+    time (3 x N: east, north, up). Its norm climbing during a sustained error
+    and then holding flat is the integrator accumulating and anti-windup
+    capping it at `u_i_max`, rather than running away.
+    """
+    norm = np.linalg.norm(integral_log, axis=0)
+
+    fig, ax = plt.subplots(figsize=(11, 4), constrained_layout=True)
+    ax.plot(ts, norm, color='teal', lw=1.8, label=r'$\|K_i \xi\|$')
+    if u_i_max is not None:
+        ax.axhline(u_i_max, color='0.3', ls='--', lw=1.2, label='u_i_max cap')
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('Integral contribution to u [m/s$^2$]')
+    ax.legend(fontsize=10, loc='upper right')
+    ax.grid(alpha=0.3)
+    if title:
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+
+    if save_dir:
+        _save(fig, fname, save_dir)
+    return fig
+
+
 def state_control_grid(t, X_err, U_pert, title='Nonlinear Model',
                        save_dir=None, fname='state_control',
                        ref_target='payload'):
@@ -583,7 +611,8 @@ def state_control_panels(t, X_err, U_pert, title='Nonlinear Model',
 def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
              traj_title='Trajectory',
              save_dir=FIG_DIR, layout='panels', n_tethers=25, fnames=None,
-             verbose=False, ref_target='payload', xi_log=None, var_log=None):
+             verbose=False, ref_target='payload', xi_log=None, var_log=None,
+             integral_log=None, u_i_max=None):
     """Generate every figure and write it to ``save_dir`` (default ``figs/``).
 
     layout : 'panels' (two 2x2, default), 'grid' (one 4x2), or 'both'.
@@ -591,6 +620,9 @@ def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
     xi_log : EKF state history (5 x N); adds the estimated payload path to the
         trajectory and the estimate-vs-truth figure.
     var_log : covariance diagonal (5 x N); adds 2-sigma bands to that figure.
+    integral_log : outer-loop integral term's contribution to u (3 x N), only
+        for a controller with one (LQI); adds the integrator-state figure.
+    u_i_max : anti-windup cap on that contribution, drawn as a line on it.
     Returns a dict mapping a short key to each Figure.
     """
     figs = {'trajectory': plot_trajectory_3d(
@@ -626,6 +658,9 @@ def save_all(ts, X, P_ref, t, X_err, U_pert, title='Nonlinear Model',
     if xi_log is not None:
         figs['ekf_states'] = plot_ekf_states(ts, X, xi_log, var_log,
                                              save_dir=save_dir)
+    if integral_log is not None:
+        figs['integrator_state'] = plot_integrator_state(
+            ts, integral_log, u_i_max, save_dir=save_dir)
     return figs
 
 
@@ -636,10 +671,10 @@ def plot_run(run, save_dir=None, layout='panels', show=True,
              ref_target=None):
     """Draw every figure for one run, writing them only if `save_dir` is set.
 
-    `run` holds what simulate() produced -- ts, X, P_ref, err_log, u_log, and
-    optionally xi_log -- plus the architecture name and the body the reference
-    was drawn for. `ref_target` overrides the latter. Returns the dict of
-    figures.
+    `run` holds what simulate() produced (ts, X, P_ref, err_log, u_log, and
+    optionally xi_log/integral_log), plus the architecture name and the body
+    the reference was drawn for. `ref_target` overrides the latter. Returns
+    the dict of figures.
     """
     ref_target = ref_target or run['ref_target']
     title = f"Nonlinear Model - {run['arch']}" if run['arch'] \
@@ -652,7 +687,9 @@ def plot_run(run, save_dir=None, layout='panels', show=True,
                     traj_title='Simulation: Drone and Payload Trajectory',
                     save_dir=save_dir, layout=layout, verbose=True,
                     ref_target=ref_target, xi_log=run.get('xi_log'),
-                    var_log=run.get('var_log'))
+                    var_log=run.get('var_log'),
+                    integral_log=run.get('integral_log'),
+                    u_i_max=run.get('u_i_max'))
     if save_dir:
         print(f'figures written to {save_dir}/')
 

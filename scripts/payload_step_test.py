@@ -90,6 +90,7 @@ if __name__ == '__main__':
 
         # define outer-loop control law
         controller = dynamics.OuterLoopPayloadLQI()
+        logger.set_controller(controller)
 
         # payload swing estimator: attitude comes from the logger cache, which
         # ControlComms has already populated by blocking for the first state

@@ -49,6 +49,7 @@ if __name__ == '__main__':
                                poses_out)
 
     controlLaw = dynamics.OuterLoopPayloadLQR()
+    logger.set_controller(controlLaw)
 
     print("monitoring for GUIDED mode...")
     # monitors the mode and swaps to payload stick control when in GUIDED

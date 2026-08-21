@@ -453,8 +453,6 @@ def trajectory_plot(df, save=None):
                 label="reference")
 
     ax.scatter([E[0]], [N[0]], c="red", zorder=5, s=45, label="start")
-    ax.scatter([0], [0], c="black", marker="x", s=70, zorder=5,
-               label="local origin")
 
     ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]")
     ax.set_title("Horizontal trajectory (ENU), colored by mode")
@@ -487,8 +485,6 @@ def payload_trajectory_plot(df, save=None, L=None):
                 label="reference")
 
     ax.scatter([E[0]], [N[0]], c="red", zorder=5, s=45, label="start")
-    ax.scatter([0], [0], c="black", marker="x", s=70, zorder=5,
-               label="local origin")
 
     ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]")
     ax.set_title("Payload horizontal trajectory (ENU), colored by mode")
@@ -504,9 +500,11 @@ def payload_trajectory_plot(df, save=None, L=None):
 
 def _set_equal_3d(ax, X, Y, Z):
     """Equal data aspect for a 3D axes (matplotlib has no axis('equal') in 3D)."""
-    xr, yr, zr = np.ptp(X), np.ptp(Y), np.ptp(Z)
-    r = max(xr, yr, zr) / 2 or 1.0
-    cx, cy, cz = (X.max()+X.min())/2, (Y.max()+Y.min())/2, (Z.max()+Z.min())/2
+    xmin, xmax = np.nanmin(X), np.nanmax(X)
+    ymin, ymax = np.nanmin(Y), np.nanmax(Y)
+    zmin, zmax = np.nanmin(Z), np.nanmax(Z)
+    r = max(xmax-xmin, ymax-ymin, zmax-zmin) / 2 or 1.0
+    cx, cy, cz = (xmax+xmin)/2, (ymax+ymin)/2, (zmax+zmin)/2
     ax.set_xlim(cx-r, cx+r); ax.set_ylim(cy-r, cy+r); ax.set_zlim(cz-r, cz+r)
     try:
         ax.set_box_aspect((1, 1, 1))
@@ -550,7 +548,6 @@ def trajectory_plot_3d(df, save=None, L=None):
         box = [np.append(a, p[:, k]) for k, a in enumerate(box)]
 
     ax.scatter([E[0]], [N[0]], [U[0]], c="red", s=45, label="start")
-    ax.scatter([0], [0], [0], c="black", marker="x", s=70, label="local origin")
 
     ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.set_zlabel("Up [m]")
     ax.set_title("3D trajectory (ENU), colored by mode")

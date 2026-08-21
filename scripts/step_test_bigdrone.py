@@ -79,6 +79,7 @@ if __name__ == '__main__':
 
         # define outer-loop control law
         controller = dynamics.OuterLoopLQR()
+        logger.set_controller(controller)
 
 
         # run autonomy

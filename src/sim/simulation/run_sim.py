@@ -120,6 +120,10 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
     u_log = np.zeros((4, len(ts)))
     xi_log = np.zeros((5, len(ts)))
     var_log = np.zeros((5, len(ts)))
+    # architecture.outer's own integral term (its contribution to u, [m/s^2]),
+    # not the EKF's xi above -- only set when the outer loop has one (LQI)
+    outer = getattr(architecture, 'outer', None)
+    integral_log = np.zeros((3, len(ts))) if hasattr(outer, 'xi') else None
 
     pert = np.zeros(16)
     pert[12] = math.radians(30)
@@ -151,6 +155,8 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
             x_hat[12:16] = filt.xi[0:4]
 
         u, e = architecture(x_hat, t, pl_ref)
+        if integral_log is not None:
+            integral_log[:, i] = outer.Ki @ outer.xi
         xdot = nonlinear_ode(x, u)
 
         if wind_dict is not None:
@@ -172,7 +178,7 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
     err_log[0:3] = (p_tgt - P_ref).T
     err_log[3:6] = (v_tgt - np.array([ref(t)[1] for t in ts])).T
 
-    return ts, X, P_ref, err_log, u_log, xi_log, var_log
+    return ts, X, P_ref, err_log, u_log, xi_log, var_log, integral_log
 
 
 def main():
@@ -202,14 +208,18 @@ def main():
                                       startPointHoverTime=startPointHoverTime,
                                       endPointHoverTime=endPointHoverTime)
 
-    ts, X, P_ref, err_log, u_log, xi_log, var_log = simulate(
+    ts, X, P_ref, err_log, u_log, xi_log, var_log, integral_log = simulate(
         architecture, ref, ekf=args.ekf, ref_target=args.ref_target, wind_dict=args.wind)
 
     print(f'{args.arch} ({args.ref_target} reference): {len(ts)} samples '
           f'over {ts[-1]:.1f} s')
 
+    outer = getattr(architecture, 'outer', None)
+    u_i_max = getattr(outer, 'u_i_max', None)
+
     plotting.plot_run(dict(ts=ts, X=X, P_ref=P_ref, err_log=err_log,
                            u_log=u_log, xi_log=xi_log, var_log=var_log,
+                           integral_log=integral_log, u_i_max=u_i_max,
                            arch=args.arch,
                            ref_target=args.ref_target),
                       layout="panels")

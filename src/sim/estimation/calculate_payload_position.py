@@ -30,7 +30,9 @@ def get_payload_center_in_drone_frame(payload_center_in_camera_frame, geom=pp.DE
         return None
 
     # position in drone frame: camera rotation, then camera translation
-    return geom.T_BC @ np.asarray(payload_center_in_camera_frame) + geom.t_BC_B
+    payload_center_in_drone_frame = (geom.T_BC @ np.asarray(payload_center_in_camera_frame)
+                                     + geom.t_BC_B)
+    return payload_center_in_drone_frame
 
 
 def get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_position_attitude):

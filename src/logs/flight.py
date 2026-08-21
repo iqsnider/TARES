@@ -71,8 +71,9 @@ class FlightLogger:
 
         # the exact config this flight ran with, in case config.py changes later
         self.config_path = os.path.join(data_dir, "config_snapshot.json")
+        self._config = _config_snapshot()
         with open(self.config_path, "w") as f:
-            json.dump(_config_snapshot(), f, indent=2, sort_keys=True)
+            json.dump(self._config, f, indent=2, sort_keys=True)
 
         # make and name the path to the data csv file
         self.path = os.path.join(data_dir, f"flight_{stamp}.csv")
@@ -125,6 +126,16 @@ class FlightLogger:
             "servo": [NAN]*8,
             # COMMAND_ACK for debugging
             "last_cmd": None, "last_cmd_result": None}
+
+    def set_controller(self, controller):
+        """
+        Record which outer-loop controller class this flight used.
+        Call once, right after constructing it. Accepts the object or a name.
+        """
+        name = controller if isinstance(controller, str) else type(controller).__name__
+        self._config["CONTROLLER"] = name
+        with open(self.config_path, "w") as f:
+            json.dump(self._config, f, indent=2, sort_keys=True)
 
     def note_sent(self, bitmask=None, mode=None):
         """
