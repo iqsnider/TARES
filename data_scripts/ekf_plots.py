@@ -741,7 +741,12 @@ def overlay_video(session, records, save=None, n_sigma=2):
         raise SystemExit(f"cannot open {src}")
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    # the source video's own header fps is only the rate that was requested,
+    # not what the camera actually achieved; poses.csv time_s is the ground
+    # truth, and this pass already reads every frame regardless, so using it
+    # here costs nothing extra
+    t_pose = session.poses.groupby("frame").time_s.first().to_numpy()
+    fps = (len(t_pose) - 1) / (t_pose[-1] - t_pose[0]) if len(t_pose) > 1 else 30
 
     out = Path(save) if save else src.with_name(session.id + OVERLAY_SUFFIX)
     writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"),

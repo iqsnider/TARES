@@ -53,7 +53,7 @@ _cam_exp_abs_by_airframe = {"AURELIA_X4": 9, "IF1200": 3}
 CAM_EXP_ABS = _cam_exp_abs_by_airframe[AIRFRAME]
 CAM_PREVIEW_PORT = None
 CAM_FPS = 48
-CAM_STRIDE = 1
+CAM_STRIDE = 2
 
 
 # camera offsets, referenced to the front of the drone and CoG [m]
@@ -129,8 +129,10 @@ LQR_DRONE_Q_VEL_Z = _lqr_drone_q_vel_z_by_airframe[AIRFRAME]
 LQR_DRONE_R_ACC = _lqr_drone_r_acc_by_airframe[AIRFRAME]
 
 # payload outer loop (OuterLoopPayloadLQR)
-_lqr_payload_w_pos_xy_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
-_lqr_payload_w_pos_z_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
+_lqr_payload_w_pos_xy_by_airframe = {
+    "AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
+_lqr_payload_w_pos_z_by_airframe = {
+    "AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2}
 _lqr_payload_tuning_const_by_airframe = {
     "AURELIA_X4": (1/1)**2, "IF1200": (1/1)**2}
 LQR_PAYLOAD_W_POS_XY = _lqr_payload_w_pos_xy_by_airframe[AIRFRAME]
@@ -138,9 +140,12 @@ LQR_PAYLOAD_W_POS_Z = _lqr_payload_w_pos_z_by_airframe[AIRFRAME]
 LQR_PAYLOAD_TUNING_CONST = _lqr_payload_tuning_const_by_airframe[AIRFRAME]
 
 # payload outer loop with integral action (OuterLoopPayloadLQI)
-_lqi_payload_w_pos_xy_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
-_lqi_payload_w_pos_z_by_airframe = {"AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
-_lqi_payload_w_int_xy_by_airframe = {"AURELIA_X4": (1/4)**2, "IF1200": (1/8)**2}
+_lqi_payload_w_pos_xy_by_airframe = {
+    "AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
+_lqi_payload_w_pos_z_by_airframe = {
+    "AURELIA_X4": (1/1)**2, "IF1200": (1/1.5)**2}
+_lqi_payload_w_int_xy_by_airframe = {
+    "AURELIA_X4": (1/4)**2, "IF1200": (1/8)**2}
 _lqi_payload_w_int_z_by_airframe = {"AURELIA_X4": (1/4)**2, "IF1200": (1/8)**2}
 _lqi_payload_tuning_const_by_airframe = {
     "AURELIA_X4": (1/1)**2, "IF1200": (1/1)**2}

@@ -253,7 +253,8 @@ class MarkerPoseRecorder:
                  preview_port=None,
                  preview_fps=12,
                  preview_width=960,
-                 preview_quality=60):
+                 preview_quality=60,
+                 fix_playback_fps=False):
         # logging
         self.flight_logger = flight_logger
         self.mav = None
@@ -265,6 +266,7 @@ class MarkerPoseRecorder:
         self.csv_out = os.path.expanduser(csv_out)
         self.print_every = print_every            # 0 = silent per-frame
         self.write_queue_size = write_queue_size
+        self.fix_playback_fps = fix_playback_fps
 
         # capture format. These must be a (pixel_format, size, rate) triple the
         # driver actually lists -- check with:
@@ -626,6 +628,41 @@ class MarkerPoseRecorder:
                 pct = 100*dropped/attempted if attempted else 0
                 print(f"dropped {dropped} of {attempted} frames at the camera "
                       f"read ({pct:.0f}%) -- empty/corrupt buffers, not a code error")
+            if self.fix_playback_fps and achieved > 0 and abs(achieved - self.fps) > 0.5:
+                self._rewrite_at_fps(achieved)
+
+    def _rewrite_at_fps(self, fps):
+        """
+        Rewrite video_out with its header set to the fps actually achieved.
+
+        cv2.VideoWriter bakes the requested fps into the file at creation,
+        but the real rate is only known once recording is done, so a run
+        that fell short plays back too fast in an ordinary video player.
+        This re-decodes and re-encodes every frame at the true rate -- one
+        extra MJPG generation of quality, and roughly as long as the
+        recording itself -- so it only runs when the two rates diverge.
+        """
+        tmp_path = self.video_out + ".fps_fix.avi"
+        cap = cv2.VideoCapture(self.video_out)
+        if not cap.isOpened():
+            print(f"could not reopen {self.video_out} to fix playback speed")
+            return
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        writer = cv2.VideoWriter(
+            tmp_path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
+        n = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            writer.write(frame)
+            n += 1
+        cap.release()
+        writer.release()
+        os.replace(tmp_path, self.video_out)
+        print(f"rewrote {self.video_out} at {fps:.1f} fps "
+              f"({n} frames) for correct playback speed")
 
     # context-manager support
     def __enter__(self):
