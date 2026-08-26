@@ -105,11 +105,20 @@ def get_payload_center_in_camera_frame(frame, geom=DEFAULT_GEOMETRY):
     return center
 
 
+def pivot_to_payload(pC_ctr, geom=DEFAULT_GEOMETRY):
+    """
+    Vector from the tether pivot to the payload center, camera frame [m]
+    """
+    pC = np.asarray(pC_ctr, float) + geom.T_CB @ (geom.t_BC_B - geom.l_B)
+
+    return pC
+
+
 def shift_origin(pC_ctr, geom=DEFAULT_GEOMETRY):
     """
     Shift the origin from the camera optical center to the tether pivot point
     """
-    pC = np.asarray(pC_ctr, float) + geom.T_CB @ (geom.t_BC_B - geom.l_B)
+    pC = pivot_to_payload(pC_ctr, geom=geom)
 
     normalized_pC = pC/np.linalg.norm(pC)
 
@@ -185,6 +194,26 @@ def measurement_from_poses(poses, T_IB, geom=DEFAULT_GEOMETRY):
 
     z = _build_z(detection, T_IB, geom=geom)
     return z
+
+
+def range_from_poses(poses, geom=DEFAULT_GEOMETRY):
+    """
+    Distance from the tether pivot to the payload center [m], or None.
+
+    The measurement the EKF throws away when it normalizes the bearing, which
+    is what a tether length is: hang the payload still and read this.
+    """
+    if not poses:
+        return None
+
+    detection = center_from_records(
+        [(mid, rvec, tvec) for mid, (rvec, tvec) in poses.items()], geom=geom)
+    if detection is None:
+        return None
+
+    r = float(np.linalg.norm(pivot_to_payload(detection[0], geom=geom)))
+
+    return r
 
 
 def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):

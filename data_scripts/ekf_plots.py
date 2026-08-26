@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import Prm.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
@@ -38,6 +39,9 @@ CALIB_FILE = (Path(__file__).resolve().parents[1] /
 BGR_EST = (60, 255, 80)
 BGR_REF = (60, 60, 255)
 BGR_ERR = (255, 60, 0)
+BGR_AXIS = (245, 245, 245)
+BGR_PLUMB = (255, 60, 200)
+BGR_HOLD = (0, 200, 255)
 
 # A point the lens never saw is an extrapolation of the distortion polynomial,
 # which folds far-off-axis points back into the picture. The calibration only
@@ -47,8 +51,8 @@ MAX_TAN = 1.2
 MIN_DEPTH_M = 0.1
 
 # How far ahead the velocity arrow reaches: one second of travel at the
-# current swing velocity, which is a length on the ground rather than a gain
-# that has to be looked up to be read.
+# current swing velocity, which is a length rather than a gain that has to be
+# looked up to be read.
 LEAD_S = 1.0
 
 
@@ -94,6 +98,62 @@ def estimated_payload_enu(records, fl, L_m):
     return tf, np.c_[E, N, U] + L_m * q
 
 
+# filter tuning a session snapshots, keyed by the EKF's own argument name
+EKF_TUNING = {"q_xy": "EKF_Q_XY", "q_yaw": "EKF_Q_YAW",
+              "sigma_xy": "EKF_SIGMA_XY", "sigma_yaw": "EKF_SIGMA_YAW",
+              "sigma_alpha_0": "EKF_SIGMA_ALPHA_0",
+              "sigma_rate_0": "EKF_SIGMA_RATE_0",
+              "sigma_psi_p_0": "EKF_SIGMA_PSI_P_0",
+              "zeta": "EKF_ZETA"}
+
+
+def ekf_tuning(cfg):
+    """A session's own filter tuning, so a replay is the filter that was flown.
+
+    Runs recorded before the tuning was snapshotted never wrote it down, and
+    those fall back to the airframe they flew rather than to whatever
+    Prm/config.py is set to today -- otherwise replaying an old flight while
+    the bench rig is selected runs it on the bench's numbers.
+    """
+    tuning = {arg: cfg[key] for arg, key in EKF_TUNING.items() if key in cfg}
+    if not tuning:
+        tuning = config.ekf_tuning_for(cfg["AIRFRAME"])
+
+    return tuning
+
+
+def hold_windows(fl):
+    """Stretches of flight time where the run deliberately cut the camera.
+
+    The bench test stamps sent_mode HOLD on those ticks, since nothing else is
+    using that column when no setpoints go out. Empty for a real flight, whose
+    gaps are occlusions rather than choices.
+    """
+    mode = fl.sent_mode.astype(str).to_numpy()
+    t = fl.cur_time.to_numpy(float)
+    held = mode == "HOLD"
+    if not held.any():
+        return []
+
+    edges = np.flatnonzero(np.diff(held.astype(int)))
+    bounds = np.concatenate([[0], edges + 1, [len(held)]])
+    windows = [(t[a], t[b-1]) for a, b in zip(bounds[:-1], bounds[1:])
+               if held[a]]
+
+    return windows
+
+
+def held_at(windows):
+    """A predicate over flight time for `run_full`, or None if nothing held."""
+    if not windows:
+        return None
+
+    def hold(t):
+        return any(lo <= t <= hi for lo, hi in windows)
+
+    return hold
+
+
 def analyze(session, verbose=True):
     """Run the payload EKF over a session. Returns what the plots need.
 
@@ -113,12 +173,20 @@ def analyze(session, verbose=True):
     inp = build_inputs(session.fl)
     frames = group_frames(session.poses)
 
-    records = run_full(frames, inp, offset, geom=geom)
+    # L as well as geom: the pendulum frequency is the session's, not whatever
+    # airframe Prm/config.py happens to be set to today
+    windows = hold_windows(session.fl)
+    records = run_full(frames, inp, offset, geom=geom,
+                       hold=held_at(windows),
+                       L=session.config["TETHER_LEN"],
+                       **ekf_tuning(session.config))
     meas_df = direct_measurement(frames, inp, offset, geom=geom)
     if verbose:
         print(f"pose clock -> flight clock: {offset:+.3f} s")
         print(f"{len(records)} filter steps, "
               f"{sum(r['n'] > 0 for r in records)} with a measurement")
+        for lo, hi in windows:
+            print(f"camera held from {lo:.1f} to {hi:.1f} s, as the run did")
         summarise(records, meas_df)
 
     from_log = catalog.has_logged_states(session.fl)
@@ -481,25 +549,46 @@ def _mode_by_frame(session):
     return by_frame
 
 
-def _corner_text(frame, lines, corner, color=(255, 255, 255), scale=1, thick=2, margin=12):
-    """Draw `lines` anchored to a fixed screen corner, outlined for legibility."""
+def _crosshair(frame, K):
+    """Lines through the camera center, for reading the velocity arrow against.
+
+    The principal point from the calibration rather than the middle of the
+    picture, though on this lens the two sit within about a pixel.
+    """
+    h, w = frame.shape[:2]
+    cx, cy = round(K[0, 2]), round(K[1, 2])
+    cv2.line(frame, (0, cy), (w, cy), BGR_AXIS, 2, cv2.LINE_AA)
+    cv2.line(frame, (cx, 0), (cx, h), BGR_AXIS, 2, cv2.LINE_AA)
+
+
+def _corner_text(frame, lines, corner, color=(255, 255, 255), scale=1, thick=2,
+                 margin=12, dy=0):
+    """Draw `lines` anchored to a fixed screen corner, outlined for legibility.
+
+    `dy` pushes the block down, to sit under a line already drawn there.
+    """
     font = cv2.FONT_HERSHEY_SIMPLEX
     step = int(30*scale)
     widths = [cv2.getTextSize(s, font, scale, thick)[0][0] for s in lines]
     right = corner == "right"
     for k, (text, width) in enumerate(zip(lines, widths)):
         x = frame.shape[1] - margin - width if right else margin
-        y = margin + step*(k+1)
+        y = margin + dy + step*(k+1)
         cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 3,
                     cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
 
 
 def _config_summary_lines(cfg):
-    """Airframe/tether/mass/controller-cost readout for a session's config_snapshot.json."""
+    """Airframe/tether/mass/controller/filter readout for a session's config_snapshot.json."""
     def g(key, fmt="{:.2f}"):
         v = cfg.get(key)
         text = fmt.format(v) if v is not None else "n/a"
+        return text
+
+    def deg(key, fmt="{:.2f}"):
+        v = cfg.get(key)
+        text = fmt.format(np.degrees(v)) if v is not None else "n/a"
         return text
     lines = [
         f"airframe {cfg.get('AIRFRAME', 'n/a')}",
@@ -510,6 +599,9 @@ def _config_summary_lines(cfg):
         f"LQR w_xy={g('LQR_PAYLOAD_W_POS_XY', '{:.3f}')} "
         f"w_z={g('LQR_PAYLOAD_W_POS_Z', '{:.3f}')} "
         f"tune={g('LQR_PAYLOAD_TUNING_CONST', '{:.3f}')}",
+        f"EKF sig_xy={deg('EKF_SIGMA_XY')} deg "
+        f"sig_yaw={deg('EKF_SIGMA_YAW', '{:.0f}')} deg "
+        f"q_xy={g('EKF_Q_XY', '{:.4f}')}",
     ]
     return lines
 
@@ -634,18 +726,18 @@ def payload_enu(r, p_drone, filt):
                                       r["xi"][ekfm.IX_ALPHA_Y], -1])
 
 
-def velocity_tip_px(r, p_drone, v_drone, filt, K, D, lead_s=LEAD_S):
+def velocity_tip_px(r, p_drone, filt, K, D, lead_s=LEAD_S):
     """Where the payload is headed, in pixels: the tip of the velocity arrow.
 
-    The velocity is the payload's over the ground, in ENU -- the drone's own
-    velocity plus what the swing adds to it:
+    The velocity is the payload's in the camera frame, which is the motion the
+    picture actually shows: the camera travels with the drone, so the drone's
+    own velocity drops out and only the swing is left,
 
-        v_I = v_drone + L*[alphadot_x, alphadot_y, 0]
+        v_rel_I = L*[alphadot_x, alphadot_y, 0]
 
-    which is the same quantity the payload velocity plot draws against the
-    reference. Note that this is not the motion the picture shows: the camera
-    travels with the drone, so a payload flying level with it at 1 m/s sits
-    still in frame while carrying a 1 m/s arrow.
+    A payload flying level with the drone at 1 m/s sits still in frame and
+    carries no arrow. The ENU velocity the controller is judged on is the
+    payload velocity plot instead.
 
     The tip is the payload's own position carried `lead_s` along that velocity
     and projected like any other point, so the arrow reads as a length rather
@@ -654,10 +746,28 @@ def velocity_tip_px(r, p_drone, v_drone, filt, K, D, lead_s=LEAD_S):
     prediction -- the tether is a 6.3 s pendulum, so a second of swing turns
     through a sixth of a cycle and the payload never reaches the tip.
     """
-    v_I = v_drone + filt.L*np.array([r["xi"][ekfm.IX_ALPHA_DOT_X],
-                                     r["xi"][ekfm.IX_ALPHA_DOT_Y], 0])
-    ahead = payload_enu(r, p_drone, filt) + lead_s*v_I
-    return project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
+    v_rel_I = filt.L*np.array([r["xi"][ekfm.IX_ALPHA_DOT_X],
+                               r["xi"][ekfm.IX_ALPHA_DOT_Y], 0])
+    ahead = payload_enu(r, p_drone, filt) + lead_s*v_rel_I
+
+    tip = project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
+
+    return tip
+
+
+def plumb_px(p_drone, T_IB, filt, K, D):
+    """Straight down from the drone, one tether length, in pixels.
+
+    Where the payload would hang with no swing at all, so the green dot's
+    distance from it is the swing itself. Not the same point as the camera
+    center: the camera sits off the drone's CG and the picture leans with the
+    drone's attitude, while this hangs on gravity.
+    """
+    below = np.asarray(p_drone, float) + np.array([0, 0, -filt.L])
+
+    uv = project_enu(below, p_drone, T_IB, filt, K, D)[0]
+
+    return uv
 
 
 def reference_pixels(session, records, filt, K, D, stride=5, truncate=False):
@@ -706,27 +816,29 @@ def reference_pixels(session, records, filt, K, D, stride=5, truncate=False):
     return out
 
 
-def overlay_video(session, records, save=None, n_sigma=2):
+def overlay_video(session, records, save=None):
     """Redraw the recording with the EKF payload estimate on each frame.
 
-    A green dot marks where the filter believes the payload is and the shaded
-    ellipse around it is its `n_sigma` position uncertainty, both projected
-    into the camera by `EKF.estimate_to_px_coords`. A green arrow off the dot
-    is the payload's ENU velocity, one second of travel long, drawn where that
-    second would take it. The reference the run was flying is drawn in
+    A green dot marks where the filter believes the payload is, projected into
+    the camera by `EKF.estimate_to_px_coords`. A green arrow off the dot is the
+    payload's velocity in the camera frame, one second of travel long, drawn
+    where that second would take it, and gray lines through the camera center
+    give it something to be read against. A purple dot hangs one tether length
+    straight below the drone, so the swing is the gap between purple and green.
+    The reference the run was flying is drawn in
     red -- the whole track as a line, the sample being chased now as a dot --
     so the estimate can be read against what it was supposed to be. A blue
     line closes the gap between the two, labelled with how far apart they are
     in metres. Frames the filter never reached are copied through untouched.
 
-    Records with `P=None` -- the states read back out of a flight log, which
-    carries no covariance -- get the dot without the ellipse. The geometry
-    used to project the estimate into pixels comes from the session's own
-    config_snapshot.json (session.config), not the live Prm/config.py.
+    The geometry used to project the estimate into pixels comes from the
+    session's own config_snapshot.json (session.config), not the live
+    Prm/config.py.
 
     The current flight mode is drawn top-left, colored like the mode-shaded
-    plots (drone_plot.MODE_SHADING). The session's tether length, drone/
-    payload mass, and payload LQR costs are drawn top-right.
+    plots (drone_plot.MODE_SHADING), and under it whether that frame gave the
+    filter a measurement at all. The session's tether length, drone/payload
+    mass, and payload LQR costs are drawn top-right.
     """
     geom = pp.Geometry.from_snapshot(session.config)
     mode_by_frame = _mode_by_frame(session)
@@ -755,21 +867,18 @@ def overlay_video(session, records, save=None, n_sigma=2):
     K, D = _intrinsics()
     filt = make_ekf(0, 0, 0, 0, 0, 0, geom=geom,
                     L=session.config.get("TETHER_LEN"))
-    p_drone, v_drone = drone_states(session.fl, records)
+    p_drone, _ = drone_states(session.fl, records)
+    meas_by_frame = {r["frame"]: r["n"] for r in records}
     drawn = {}
     for k, r in enumerate(records):
-        P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM)) if r["P"] is None \
-            else r["P"]
-        center, axes, angle = filt.estimate_to_px_coords(
-            r["xi"], P, r["T_IB"], K, D, n_sigma)
-        if r["P"] is None:
-            axes = None
+        # P only ever fed the uncertainty ellipse, so zeros do here
+        P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM))
+        center, _, _ = filt.estimate_to_px_coords(r["xi"], P, r["T_IB"], K, D)
         # a payload swung out of the camera's half-space projects nowhere
-        if np.isfinite(center).all() and (axes is None or
-                                          np.isfinite(axes).all()):
-            drawn[r["frame"]] = (center, axes, angle,
-                                 velocity_tip_px(r, p_drone[k], v_drone[k],
-                                                 filt, K, D))
+        if np.isfinite(center).all():
+            drawn[r["frame"]] = (center,
+                                 velocity_tip_px(r, p_drone[k], filt, K, D),
+                                 plumb_px(p_drone[k], r["T_IB"], filt, K, D))
     ref = reference_pixels(session, records, filt, K, D,
                            truncate="stick" in session.label.lower())
 
@@ -779,11 +888,21 @@ def overlay_video(session, records, save=None, n_sigma=2):
         if not ok:
             break
 
+        _crosshair(frame, K)
+
         mode = mode_by_frame.get(i)
         if mode is not None:
             mode_color = _vivid(_hex_to_bgr(
                 drone_plot.MODE_SHADING.get(mode, ("0.7", 0))[0]))
             _corner_text(frame, [mode], "left", color=mode_color, scale=2, thick=4)
+
+        # whether this frame fed the filter anything, so a blackout is visible
+        # the moment it starts rather than inferred from the estimate drifting
+        n = meas_by_frame.get(i)
+        if n is not None:
+            _corner_text(frame, ["MEASUREMENT" if n else "NO MEASUREMENT"],
+                         "left", color=BGR_EST if n else BGR_HOLD,
+                         scale=1.4, thick=3, dy=64 if mode is not None else 0)
         _corner_text(frame, config_lines, "right")
 
         # under the estimate: where the payload is beats where it should be
@@ -799,8 +918,14 @@ def overlay_video(session, records, save=None, n_sigma=2):
 
         hit = drawn.get(i)
         if hit is not None:
-            center, axes, angle, tip = hit
+            center, tip, plumb = hit
             c = tuple(np.round(center).astype(int))
+
+            # under the estimate: the swing is the gap between the two
+            if np.isfinite(plumb).all():
+                at_plumb = tuple(np.clip(plumb, -1e4, 1e4).round().astype(int))
+                cv2.circle(frame, at_plumb, 6, BGR_PLUMB, -1, cv2.LINE_AA)
+                cv2.circle(frame, at_plumb, 6, (255, 255, 255), 2, cv2.LINE_AA)
 
             # the gap the run is being judged on, drawn where it happens and
             # labelled with the length it actually is
@@ -809,22 +934,13 @@ def overlay_video(session, records, save=None, n_sigma=2):
                 mid = ((at_ref[0] + c[0])//2, (at_ref[1] + c[1])//2)
                 _label(frame, mid, (f"{err_m:.2f} m",), color=BGR_ERR)
 
-            if axes is not None:
-                ax = tuple(np.maximum(np.round(axes).astype(int), 1))
-                shade = frame.copy()
-                cv2.ellipse(shade, c, ax, angle, 0, 360, BGR_EST, -1)
-                cv2.addWeighted(shade, 0.35, frame, 0.65, 0, frame)
-                cv2.ellipse(frame, c, ax, angle, 0, 360, BGR_EST, 2)
-
             if np.isfinite(tip).all():
                 cv2.arrowedLine(frame, c,
                                 tuple(np.clip(tip, -1e4, 1e4).round().astype(int)),
                                 BGR_EST, 2, cv2.LINE_AA, tipLength=0.2)
 
-            # the dot stays smaller than the band it sits in; at this range a
-            # 2-sigma ellipse is only about ten pixels across
-            cv2.circle(frame, c, 4, BGR_EST, -1)
-            cv2.circle(frame, c, 4, (255, 255, 255), 1)
+            cv2.circle(frame, c, 6, BGR_EST, -1)
+            cv2.circle(frame, c, 6, (255, 255, 255), 2)
         writer.write(frame)
         i += 1
 

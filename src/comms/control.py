@@ -277,8 +277,6 @@ class ControlComms:
                'last_report': 0,
                'n_lp': 0}
 
-        a_I = np.zeros(3)
-
         last_seq = -1
 
         # the loop time the filter last integrated to; None until the first
@@ -325,7 +323,7 @@ class ControlComms:
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, P = est.step_ekf(ekf, poses, a_I, dt_ekf,
+            xi, P = est.step_ekf(ekf, poses, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # payload reference, lifted to the drone equilibrium
@@ -335,9 +333,6 @@ class ControlComms:
             # assemble the measured 16-state and compute the control input
             x16 = est.payload_state_16(x, xi)
             u = controller.compute_u(x16 - x_ref)
-
-            # carry the commanded acceleration into the next predict step
-            a_I = u
 
             # set setpoint msg bitmasks depending on whether or not we are commanding yaw
             if yaw_lock:

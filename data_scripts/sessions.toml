@@ -16,6 +16,15 @@
 note = "23 Jul 2026, last test of the day"
 
 
+# The 8.6 kg MASS_PAYLOAD in these two snapshots was guessed at the field and
+# is wrong: the payload weighed 6 kg. Nothing in the EKF uses mass, so the
+# swing estimate stands, but anything sized off the payload weight does not.
+[sessions.20260819_130848]
+note = "19 Aug 2026, payload integrator test. Payload was 6 kg, not the 8.6 in the snapshot"
+[sessions.20260819_131917]
+note = "19 Aug 2026, stick test. Payload was 6 kg, not the 8.6 in the snapshot"
+
+
 # ArduPilot SITL, not real flights. These five were filed twice -- under
 # data_06302026/data/ and again under a folder named SITL/ -- and the
 # byte-identical SITL/ copies were deleted, so `sim = true` is now the only

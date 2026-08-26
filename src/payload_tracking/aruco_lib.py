@@ -3,6 +3,7 @@ import csv
 import json
 import time
 import queue
+import shutil
 import signal
 import threading
 import subprocess
@@ -369,6 +370,11 @@ class MarkerPoseRecorder:
         exposure_time_absolute stays inactive until auto_exposure is switched
         to manual.
         """
+        # v4l2 is linux only, so bench runs on a laptop keep the camera defaults
+        if shutil.which("v4l2-ctl") is None:
+            print("v4l2-ctl not found -- exposure and gain left on auto")
+            return
+
         dev = f"/dev/video{camera_index}"
         if self.exposure_abs is not None:
             subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])

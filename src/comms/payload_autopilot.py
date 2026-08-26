@@ -87,8 +87,6 @@ class StickControl(ControlComms):
         self._wait_fresh_state()
         x = self.x0
 
-        a_I = np.zeros(3)
-
         last_seq = -1
         # the loop time the filter last integrated to; None until the first
         # pass, which has no elapsed time to measure and uses the nominal one
@@ -99,7 +97,8 @@ class StickControl(ControlComms):
         c = self.logger.cache
         x = self.get_state_enu(c['ned'], prev=x)
         last_seq, poses = self.recorder.latest_poses()
-        xi, _ = est.step_ekf(self.ekf, poses, a_I, dt, c['roll'], c['pitch'], c['yaw'])
+        xi, _ = est.step_ekf(self.ekf, poses, est.accel_enu(c), dt,
+                             c['roll'], c['pitch'], c['yaw'])
         self.ref_position = x[0:3] + L*np.array([xi[0], xi[1], -1])
         self.ref_velocity = np.zeros(3)
         self.ref_acceleration = np.zeros(3)
@@ -131,7 +130,7 @@ class StickControl(ControlComms):
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, _ = est.step_ekf(self.ekf, poses, a_I, dt_ekf,
+            xi, _ = est.step_ekf(self.ekf, poses, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # generate the payload reference from the stick inputs
@@ -141,9 +140,6 @@ class StickControl(ControlComms):
             # assemble the measured 16-state and compute the control input
             x16 = est.payload_state_16(x, xi)
             u = payload_controller.compute_u(x16 - x_ref)
-
-            # carry the commanded acceleration into the next predict step
-            a_I = u
 
             # send off the bitmask to the FC
             mask = self.send_accel(self.enu_ned(u), yaw=yaw_ref)

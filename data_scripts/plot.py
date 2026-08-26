@@ -36,7 +36,7 @@ def _out(save, name):
 # ----------------------------------------------------------------------------
 # what each kind draws
 # ----------------------------------------------------------------------------
-def kind_drone(s, save, cam=False):
+def kind_drone(s, save, cam=False, post=False):
     """Everything the flight log alone can show."""
     import drone_plot
     # only needed to draw the payload track, so a session with no onboard
@@ -46,7 +46,7 @@ def kind_drone(s, save, cam=False):
                           stem=s.id, L=L)
 
 
-def kind_traj(s, save, cam=False):
+def kind_traj(s, save, cam=False, post=False):
     """3-D trajectory of the drone with the camera-measured payload."""
     import payload_plot
     import sim.estimation.pre_process as pp
@@ -62,7 +62,7 @@ def kind_traj(s, save, cam=False):
         s.fl, pdf, save=_out(save, f"{s.id}_trajectory_3d.png"))
 
 
-def kind_ekf(s, save, cam=False):
+def kind_ekf(s, save, cam=False, post=False):
     """Run the payload EKF and show the 3-D and time-series comparisons.
 
     With `cam`, the recording is also written back out as an .mp4 carrying the
@@ -77,24 +77,36 @@ def kind_ekf(s, save, cam=False):
                               save=_out(save, f"{s.id}_ekf_timeseries.png"),
                               from_log_cov=r["from_log_cov"])
     if cam:
-        kind_overlay(s, save)
+        kind_overlay(s, save, post=post)
 
 
-def kind_overlay(s, save, cam=False):
+def kind_overlay(s, save, cam=False, post=False):
     """The recording with the payload estimate and the flown reference on it.
 
     Where the aircraft flew the filter itself, its logged states are what goes
     on the picture: that is the estimate the controller actually steered on,
     and re-running the filter offline would draw a different one. Only runs
     that predate the onboard filter are estimated here.
+
+    With `post`, the filter is re-run offline on the geometry and tuning in the
+    session's own config_snapshot.json. That is what you want once you have
+    calibrated something the flight itself did not know: editing the snapshot
+    afterwards cannot move states that were already logged, so it would
+    otherwise only move the drawing, not the estimate.
     """
     import ekf_plots
-    if catalog.has_logged_states(s.fl):
-        records = ekf_plots.logged_records(s)
-    else:
+    if post or not catalog.has_logged_states(s.fl):
         records = ekf_plots.analyze(s, verbose=False)["records"]
-    ekf_plots.overlay_video(s, records,
-                            save=_out(save, f"{s.id}_ekf_overlay.mp4"))
+    else:
+        records = ekf_plots.logged_records(s)
+
+    # a post-hoc run gets its own name, so it never overwrites the estimate the
+    # aircraft actually flew on
+    stem = f"{s.id}_posthoc" if post else s.id
+    out = _out(save, stem + ekf_plots.OVERLAY_SUFFIX)
+    if out is None and post:
+        out = s.pose.parent / (stem + ekf_plots.OVERLAY_SUFFIX)
+    ekf_plots.overlay_video(s, records, save=out)
 
 
 KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf,
@@ -116,6 +128,10 @@ def main(argv=None):
     ap.add_argument("--cam", action="store_true",
                     help="ekf only: also write the recording back out as an "
                          ".mp4 with the estimated payload drawn on it")
+    ap.add_argument("--post", action="store_true",
+                    help="overlay only: re-run the EKF offline on the session's "
+                         "config_snapshot.json, instead of drawing the states "
+                         "the aircraft logged")
     ap.add_argument("--root", default=None, help="override the data root")
     args = ap.parse_args(argv)
 
@@ -145,6 +161,8 @@ def main(argv=None):
                  + ", ".join(sorted(KINDS)))
     if args.cam and args.kind != "ekf":
         ap.error("--cam only applies to `ekf`")
+    if args.post and args.kind not in ("overlay", "ekf"):
+        ap.error("--post only applies to `overlay` and `ekf --cam`")
 
     try:
         s = catalog.resolve(args.selector)
@@ -157,7 +175,7 @@ def main(argv=None):
     if s.has_camera:
         print(f"   cam  {s.pose}   offset {s.pose_offset:+.2f} s")
 
-    KINDS[args.kind](s, args.save, cam=args.cam)
+    KINDS[args.kind](s, args.save, cam=args.cam, post=args.post)
 
     if args.save:
         print(f"figures written to {args.save}/")

@@ -10,6 +10,9 @@ import sim.estimation.ekf as ekf_lib
 import sim.estimation.pre_process as pp
 
 
+# RAW_IMU reports in milli-g
+G_MSS = 9.80665
+
 # full control state is 16 long; the payload swing states live at the tail
 IX_ALPHA_X_16, IX_ALPHA_Y_16 = 12, 13
 IX_ALPHA_DOT_X_16, IX_ALPHA_DOT_Y_16 = 14, 15
@@ -37,6 +40,24 @@ def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5):
                 f"cannot be seeded, so the payload loop must not be flown")
         time.sleep(0.05)
 
+
+
+def accel_enu(cache):
+    """
+    Drone acceleration in the inertial frame, from the raw IMU.
+
+    RAW_IMU is specific force in milli-g, body FRD. Only the horizontal
+    components reach the filter and gravity leaves those alone, so it is not
+    subtracted. Measured beats commanded here: the airframe does not achieve
+    what the outer loop asks for, and feeding it the demand predicted the
+    swing worse than feeding it nothing.
+    """
+    a_frd = np.array(cache["imu"][0:3], dtype=float)*G_MSS/1000
+    T_IB = ekf_lib.T_IB_fn(cache["roll"], cache["pitch"], cache["yaw"])
+
+    a_I = np.nan_to_num(T_IB @ (ekf_lib.P_SWAP @ a_frd))
+
+    return a_I
 
 
 def step_ekf(ekf, poses, a_I, dt, phi, theta, psi):

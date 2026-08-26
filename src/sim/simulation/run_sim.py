@@ -163,6 +163,14 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
             wind_acc = wind(winds[i], T_IB)
             xdot[3:6] += wind_acc
 
+            wx, wy, wz = wind_acc
+            sax, cax = math.sin(x[12]), math.cos(x[12])
+            say, cay = math.sin(x[13]), math.cos(x[13])
+            L = config.TETHER_LEN
+
+            xdot[14] += (cax*wx + sax*wz) / (L*cay)
+            xdot[15] += (cay*wy + say*(cax*wz - sax*wx)) / L
+
         a_prev = xdot[3:6]
 
         u_log[:, i] = u

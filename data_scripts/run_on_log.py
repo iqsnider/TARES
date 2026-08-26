@@ -43,12 +43,17 @@ def make_ekf(phi, theta, psi, alpha_x, alpha_y, psi_p, **kwargs):
     return filt
 
 
-def run_full(frames, inp, offset, geom=None):
+def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
     """
     Run the EKF over every camera frame.
 
     `geom` defaults to pre_process.DEFAULT_GEOMETRY (today's Prm/config.py);
-    pass a session's own instead, from its config_snapshot.json.
+    pass a session's own instead, from its config_snapshot.json. Filter tuning
+    in `ekf_kwargs` goes the same way, straight to the EKF.
+
+    `hold(t_flight)` marks the stretches where the run cut the camera on
+    purpose. Those frames are fed to the filter as no detection at all, so a
+    replay exercises the prediction over the same blackouts the test did.
     """
     geom = pp.DEFAULT_GEOMETRY if geom is None else geom
     t_fl = inp["t"]
@@ -63,23 +68,30 @@ def run_full(frames, inp, offset, geom=None):
         psi = np.interp(t, t_fl, inp["psi"])
         a_I = np.array([np.interp(t, t_fl, inp["a_I"][:, k]) for k in range(3)])
 
+        # a held frame reaches the filter as nothing, the way an occluded one does
+        held = hold is not None and hold(t)
+        seen = None if held else frame
+
         if filt is None:
+            if held:
+                continue
             init_ekf = pp.swing_angles(frame, ekfm.T_IB_fn(phi, theta, psi),
                                        geom=geom)
 
             if init_ekf is None:
                 continue
 
-            filt = make_ekf(phi, theta, psi, *init_ekf, geom=geom)
+            filt = make_ekf(phi, theta, psi, *init_ekf, geom=geom,
+                            **ekf_kwargs)
             t_prev = t_cam
 
             continue
 
         dt = t_cam - t_prev
         t_prev = t_cam
-        xi, P = filt(frame, a_I, dt, phi, theta, psi)
+        xi, P = filt(seen, a_I, dt, phi, theta, psi)
 
-        out.append(dict(t_cam=t_cam, t_flight=t, n=len(det),
+        out.append(dict(t_cam=t_cam, t_flight=t, n=0 if held else len(det),
                         frame=int(frame.frame.iloc[0]),
                         xi=xi.copy(), P=P.copy(), T_IB=filt.T_IB.copy(),
                         alpha_x=xi[ekfm.IX_ALPHA_X],

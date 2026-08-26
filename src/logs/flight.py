@@ -22,7 +22,7 @@ COLUMNS = [
     "payload_vx_ref", "payload_vy_ref", "payload_vz_ref",
     "payload_alpha_x", "payload_alpha_y",
     "payload_alphadot_x", "payload_alphadot_y",
-    "payload_psi_p",
+    "payload_psi_p", "payload_range_meas",
     "payload_cov_axx", "payload_cov_ayy", "payload_cov_axy",
     "payload_cov_psipsi",
     "ux", "uy", "uz", "yaw_ref", "yaw_rate_ref",
@@ -236,7 +236,7 @@ class FlightLogger:
             yaw_ref=0, yaw_rate_ref=0,
             payload_p_ref=None, payload_v_ref=None,
             payload_alpha=None, payload_alphadot=None,
-            payload_psi_p=None, payload_cov=None):
+            payload_psi_p=None, payload_range=None, payload_cov=None):
         """
         Call once per control tick, AFTER send_accel/note_sent.
           t: loop time since start (control loop's `t`)
@@ -245,6 +245,8 @@ class FlightLogger:
           u: control output (ux,uy,uz), same frame you pass to the controller (usually the acceleration setpoint)
           payload_*: optional, None until the ArUco/KF payload tracker is online
           payload_psi_p: payload yaw estimate [rad]
+          payload_range: camera range from the tether pivot to the payload
+            center [m], the raw measurement, not an estimate
           payload_cov: (Pxx, Pyy, Pxy, Ppp), the alpha_x/alpha_y/psi_p block
             of the EKF covariance, not the full state covariance
         """
@@ -266,6 +268,7 @@ class FlightLogger:
         pl_ad = payload_alphadot if payload_alphadot is not None else (
             NAN, NAN)
         pl_psi = payload_psi_p if payload_psi_p is not None else NAN
+        pl_rng = payload_range if payload_range is not None else NAN
         pl_cov = payload_cov if payload_cov is not None else (NAN, NAN, NAN, NAN)
         hb_age = now - \
             c["last_hb_wall"] if c["last_hb_wall"] is not None else NAN
@@ -292,7 +295,7 @@ class FlightLogger:
             "payload_vx_ref": pl_vr[0], "payload_vy_ref": pl_vr[1], "payload_vz_ref": pl_vr[2],
             "payload_alpha_x": pl_a[0], "payload_alpha_y": pl_a[1],
             "payload_alphadot_x": pl_ad[0], "payload_alphadot_y": pl_ad[1],
-            "payload_psi_p": pl_psi,
+            "payload_psi_p": pl_psi, "payload_range_meas": pl_rng,
             "payload_cov_axx": pl_cov[0], "payload_cov_ayy": pl_cov[1],
             "payload_cov_axy": pl_cov[2], "payload_cov_psipsi": pl_cov[3],
             # control input
