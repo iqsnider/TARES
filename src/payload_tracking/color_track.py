@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from payload_tracking.aruco_lib import (_AsyncWriter, _FrameGrabber,
-                                        _MJPEGPreview)
+                                        _MJPEGPreview, apply_camera_controls)
 
 NAN = float("nan")
 
@@ -93,6 +93,7 @@ class ColorCircleRecorder:
         self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                                  (morph_px, morph_px))
 
+        self.camera_index = 0
         self.cap = None
         self.writer = None
         self.csv_file = None
@@ -284,27 +285,21 @@ class ColorCircleRecorder:
 
     def _set_camera_controls(self, camera_index):
         """
-        Pin exposure and gain via v4l2-ctl. Must run after the stream is live,
-        since setting the format resets controls on many UVC drivers. There is
-        no v4l2 on a mac, where uvc-util sets the same controls by hand.
+        Pin exposure and gain on the driver. Must run after the stream is live,
+        since setting the format resets controls on many UVC drivers.
         """
-        if shutil.which("v4l2-ctl") is None:
-            print("v4l2-ctl not found, exposure and gain left as they are")
-            return
+        print(apply_camera_controls(camera_index, self.exposure_abs, self.gain))
 
-        dev = f"/dev/video{camera_index}"
-        if self.exposure_abs is not None:
-            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
-            subprocess.run(["v4l2-ctl", "-d", dev,
-                            "-c", f"exposure_time_absolute={self.exposure_abs}"])
-        else:
-            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
-        subprocess.run(["v4l2-ctl", "-d", dev, "-c", f"gain={self.gain}"])
-        readback = subprocess.run(
-            ["v4l2-ctl", "-d", dev, "-C",
-             "auto_exposure,exposure_time_absolute,gain"],
-            capture_output=True, text=True)
-        print(readback.stdout.strip())
+    def set_controls(self, exposure_abs=None, gain=None):
+        """
+        Change exposure or gain while recording, from the preview sliders
+        """
+        if exposure_abs is not None:
+            self.exposure_abs = exposure_abs
+        if gain is not None:
+            self.gain = gain
+
+        return apply_camera_controls(self.camera_index, exposure_abs, gain)
 
     def open(self, camera_index=0):
         """
@@ -315,6 +310,7 @@ class ColorCircleRecorder:
         os.makedirs(os.path.dirname(self.video_out) or ".", exist_ok=True)
         os.makedirs(os.path.dirname(self.csv_out) or ".", exist_ok=True)
 
+        self.camera_index = camera_index
         self.cap = cv2.VideoCapture(camera_index)
         self.cap.set(cv2.CAP_PROP_FOURCC,
                      cv2.VideoWriter_fourcc(*self.pixel_format))
@@ -361,7 +357,9 @@ class ColorCircleRecorder:
         if self.preview_port is not None:
             self._preview = _MJPEGPreview(
                 port=self.preview_port, max_width=self.preview_width,
-                fps=self.preview_fps, quality=self.preview_quality)
+                fps=self.preview_fps, quality=self.preview_quality,
+                on_control=self.set_controls,
+                exposure_abs=self.exposure_abs, gain=self.gain)
             self._preview.start()
             print(f"live preview: http://<co-computer-ip>:{self.preview_port}/  "
                   f"(or  ssh -L {self.preview_port}:localhost:{self.preview_port} "

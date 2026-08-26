@@ -8,6 +8,7 @@ import signal
 import threading
 import subprocess
 import http.server
+import urllib.parse
 import numpy as np
 
 import os
@@ -16,6 +17,55 @@ NAN = float("nan")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CALIB = os.path.join(_HERE, "camera_calibration/calibration.json")
+
+
+def apply_camera_controls(camera_index, exposure_abs=None, gain=None):
+    """
+    Pin exposure and gain on a camera that is already streaming.
+
+    v4l2-ctl on linux, uvc-util on a mac, which take the same values under
+    different names. An exposure of None puts the camera back on auto.
+    Returns whatever the tool reads back afterwards.
+    """
+    if shutil.which("v4l2-ctl"):
+        dev = f"/dev/video{camera_index}"
+        if exposure_abs is None:
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
+        else:
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c",
+                            f"exposure_time_absolute={int(exposure_abs)}"])
+        if gain is not None:
+            subprocess.run(["v4l2-ctl", "-d", dev, "-c", f"gain={int(gain)}"])
+        read = subprocess.run(
+            ["v4l2-ctl", "-d", dev, "-C",
+             "auto_exposure,exposure_time_absolute,gain"],
+            capture_output=True, text=True)
+
+        return read.stdout.strip()
+
+    if shutil.which("uvc-util"):
+        dev = ["-I", str(camera_index)]
+        if exposure_abs is None:
+            # the tool clamps this control to its own broken 0..1 range, so
+            # only the default keyword reaches the camera's auto mode
+            subprocess.run(["uvc-util", *dev, "-s",
+                            "auto-exposure-mode=default"])
+        else:
+            subprocess.run(["uvc-util", *dev, "-s", "auto-exposure-mode=1"])
+            subprocess.run(["uvc-util", *dev, "-s",
+                            f"exposure-time-abs={int(exposure_abs)}"])
+        if gain is not None:
+            subprocess.run(["uvc-util", *dev, "-s", f"gain={int(gain)}"])
+        read = []
+        for name in ("auto-exposure-mode", "exposure-time-abs", "gain"):
+            got = subprocess.run(["uvc-util", *dev, "-o", name],
+                                 capture_output=True, text=True)
+            read.append(f"{name} {got.stdout.strip()}")
+
+        return "   ".join(read)
+
+    return "no v4l2-ctl or uvc-util on PATH, camera left as it is"
 
 
 class _FrameGrabber(threading.Thread):
@@ -132,9 +182,17 @@ class _MJPEGPreview:
     """
 
     def __init__(self, port=8080, host="0.0.0.0",
-                 max_width=960, fps=12, quality=60):
+                 max_width=960, fps=12, quality=60,
+                 on_control=None, exposure_abs=None, gain=None,
+                 exposure_range=(1, 500), gain_range=(1, 100)):
         self.port = int(port)
         self.host = host
+        # set by the page's sliders while the camera runs
+        self.on_control = on_control
+        self.exposure_abs = exposure_abs
+        self.gain = gain
+        self.exposure_range = exposure_range
+        self.gain_range = gain_range
         self.max_width = int(max_width)
         self.interval = 1.0 / fps if fps and fps > 0 else 0.0
         self.quality = int(quality)
@@ -182,6 +240,44 @@ class _MJPEGPreview:
             if rem > 0:
                 time.sleep(rem)
 
+    def page(self):
+        """
+        The viewer: the stream, and a slider for exposure and one for gain
+        """
+        e_lo, e_hi = self.exposure_range
+        g_lo, g_hi = self.gain_range
+        e = self.exposure_abs if self.exposure_abs is not None else e_lo
+        g = self.gain if self.gain is not None else g_lo
+
+        return f"""<!doctype html>
+<title>payload camera</title>
+<style>
+ body {{ background:#111; color:#eee; font-family:sans-serif; margin:0;
+        padding:10px }}
+ img {{ max-width:100%; display:block; margin-bottom:10px }}
+ label {{ display:block; margin:14px 0; font-size:15px }}
+ input[type=range] {{ width:70%; vertical-align:middle }}
+ b {{ display:inline-block; min-width:4em; color:#6f6 }}
+ pre {{ color:#888; font-size:12px; white-space:pre-wrap }}
+</style>
+<img src="/stream.mjpg">
+<label>exposure <b id="ev">{e}</b> x100us
+ <input type=range id=e min={e_lo} max={e_hi} value={e}></label>
+<label>gain <b id="gv">{g}</b>
+ <input type=range id=g min={g_lo} max={g_hi} value={g}></label>
+<pre id="out"></pre>
+<script>
+ const out = document.getElementById("out");
+ function send(k, v) {{
+   fetch("/set?" + k + "=" + v).then(r => r.text()).then(t => out.textContent = t);
+ }}
+ for (const [id, lab, key] of [["e","ev","exposure"], ["g","gv","gain"]]) {{
+   const s = document.getElementById(id), t = document.getElementById(lab);
+   s.oninput = () => t.textContent = s.value;
+   s.onchange = () => send(key, s.value);
+ }}
+</script>"""
+
     def _make_handler(self):
         preview = self
 
@@ -190,9 +286,43 @@ class _MJPEGPreview:
                 pass  # silence per-request console spam
 
             def do_GET(self):
-                if self.path not in ("/", "/stream", "/stream.mjpg"):
+                path, _, query = self.path.partition("?")
+                if path == "/":
+                    self.send_text(preview.page(), "text/html")
+                elif path in ("/stream", "/stream.mjpg"):
+                    self.stream()
+                elif path == "/set":
+                    self.set_control(query)
+                else:
                     self.send_error(404)
+
+            def send_text(self, body, kind="text/plain"):
+                raw = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-cache, private")
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def set_control(self, query):
+                """Apply one slider and report what the camera reads back."""
+                if preview.on_control is None:
+                    self.send_text("this preview has no camera to control")
                     return
+                q = urllib.parse.parse_qs(query)
+                exposure = q.get("exposure", [None])[0]
+                gain = q.get("gain", [None])[0]
+                if exposure is not None:
+                    preview.exposure_abs = int(exposure)
+                if gain is not None:
+                    preview.gain = int(gain)
+
+                self.send_text(preview.on_control(
+                    exposure_abs=None if exposure is None else int(exposure),
+                    gain=None if gain is None else int(gain)))
+
+            def stream(self):
                 self.send_response(200)
                 self.send_header("Cache-Control", "no-cache, private")
                 self.send_header("Pragma", "no-cache")
@@ -215,7 +345,7 @@ class _MJPEGPreview:
                         if preview.interval > 0:
                             time.sleep(preview.interval)
                 except (BrokenPipeError, ConnectionResetError):
-                    pass  # client closed the tab -- not an error
+                    pass  # client closed the tab, not an error
 
         return Handler
 
@@ -361,36 +491,27 @@ class MarkerPoseRecorder:
         return (), None, poses
 
     def _set_camera_controls(self, camera_index):
-        """Pin exposure and gain via v4l2-ctl.
+        """Pin exposure and gain on the driver.
 
         OpenCV's property mapping on this device is unreliable (it accepts
         out-of-range values silently), so talk to the driver directly. Must run
         after the stream is live: setting the format triggers VIDIOC_S_FMT,
-        which resets controls on many UVC drivers. Two calls because
-        exposure_time_absolute stays inactive until auto_exposure is switched
-        to manual.
+        which resets controls on many UVC drivers.
         """
-        # v4l2 is linux only, so bench runs on a laptop keep the camera defaults
-        if shutil.which("v4l2-ctl") is None:
-            print("v4l2-ctl not found -- exposure and gain left on auto")
-            return
+        print(apply_camera_controls(camera_index, self.exposure_abs, self.gain))
 
-        dev = f"/dev/video{camera_index}"
-        if self.exposure_abs is not None:
-            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
-            subprocess.run(["v4l2-ctl", "-d", dev,
-                            "-c", f"exposure_time_absolute={self.exposure_abs}"])
-        else:
-            subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
-        subprocess.run(["v4l2-ctl", "-d", dev, "-c", f"gain={self.gain}"])        
-        readback = subprocess.run(
-            ["v4l2-ctl", "-d", dev, "-C",
-             "auto_exposure,exposure_time_absolute,gain"],
-            capture_output=True, text=True)
-        print(readback.stdout.strip())
+    def set_controls(self, exposure_abs=None, gain=None):
+        """Change exposure or gain while recording, from the preview sliders."""
+        if exposure_abs is not None:
+            self.exposure_abs = exposure_abs
+        if gain is not None:
+            self.gain = gain
+
+        return apply_camera_controls(self.camera_index, exposure_abs, gain)
 
     def open(self, camera_index=0):
         """Open the camera and the output video/CSV files."""
+        self.camera_index = camera_index
         self.cap = cv2.VideoCapture(camera_index)
         # FOURCC first, then size, then rate -- the driver resolves them in
         # that order and a later call can invalidate an earlier one.
@@ -446,7 +567,9 @@ class MarkerPoseRecorder:
         if self.preview_port is not None:
             self._preview = _MJPEGPreview(
                 port=self.preview_port, max_width=self.preview_width,
-                fps=self.preview_fps, quality=self.preview_quality)
+                fps=self.preview_fps, quality=self.preview_quality,
+                on_control=self.set_controls,
+                exposure_abs=self.exposure_abs, gain=self.gain)
             self._preview.start()
             print(f"live preview: http://<co-computer-ip>:{self.preview_port}/  "
                   f"(or  ssh -L {self.preview_port}:localhost:{self.preview_port} "
