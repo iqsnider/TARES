@@ -33,6 +33,9 @@ DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
 # Hand-written facts that no filename knows.
 META_FILE = Path(__file__).with_name("sessions.toml")
 
+# camera CSVs, one name per tracker: markers write poses, color writes circles
+TRACK_GLOBS = ("poses*.csv", "circles*.csv")
+
 # Pairing a camera run with its flight log, by folder stamp. The stamp is
 # taken when the recorder starts, which is before the camera device is open,
 # so it can sit well ahead of the first frame -- only good to a few seconds.
@@ -240,6 +243,19 @@ class Session:
         fl = _repair_cur_time(pd.read_csv(self.flight))
         return fl
 
+    @property
+    def tracker(self):
+        """
+        Which tracker wrote this session's camera CSV, aruco or color.
+
+        A marker run stores a pose per marker, a color run stores one ring
+        center per frame, so anything that reads marker columns has to check.
+        """
+        if not self.has_camera:
+            return None
+
+        return "color" if self.pose.name.startswith("circles") else "aruco"
+
     @cached_property
     def poses(self):
         """The camera pose CSV as a DataFrame."""
@@ -343,10 +359,15 @@ def _flight_logs(root):
     return found
 
 
+def _track_files(root):
+    """Every camera CSV under root, whichever tracker wrote it."""
+    return [p for pattern in TRACK_GLOBS for p in root.rglob(pattern)]
+
+
 def _pose_files(root):
     """[(timestamp, path)] for camera runs that carry a stamp."""
     out = []
-    for p in root.rglob("poses*.csv"):
+    for p in _track_files(root):
         t = _timestamp(p.parent.name) or _timestamp(p.name)
         if t is not None:
             out.append((t, p))
@@ -415,7 +436,7 @@ def _pair_by_wall_clock(pool, poses):
 def unpaired_poses(root=None):
     """Camera CSVs with no timestamp, so nothing to attach them to."""
     root = Path(root).expanduser() if root else DATA_ROOT
-    return sorted(p for p in root.rglob("poses*.csv")
+    return sorted(p for p in _track_files(root)
                   if _timestamp(p.parent.name) is None
                   and _timestamp(p.name) is None)
 

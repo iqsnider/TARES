@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 
+import Prm.config as config
 import sim.estimation.ekf as ekf_lib
 import sim.estimation.pre_process as pp
 
@@ -18,22 +19,55 @@ IX_ALPHA_X_16, IX_ALPHA_Y_16 = 12, 13
 IX_ALPHA_DOT_X_16, IX_ALPHA_DOT_Y_16 = 14, 15
 
 
-def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5):
+def latest_measurement(recorder, source):
+    """
+    Whatever the tracker last saw, in the shape its measurement builder wants
+    """
+    if source == ekf_lib.SOURCE_COLOR:
+        return recorder.latest_detection()
+
+    return recorder.latest_poses()
+
+
+def measurement_z(meas, T_IB, source, geom=None):
+    """
+    The EKF measurement vector from either tracker, or None with no detection.
+
+    A marker board gives bearing and payload yaw, a color ring gives bearing
+    alone, so the vector this returns is three long or two.
+    """
+    geom = pp.DEFAULT_GEOMETRY if geom is None else geom
+    if not meas:
+        return None
+
+    if source == ekf_lib.SOURCE_COLOR:
+        return pp.measurement_from_circle(meas["p_C"], geom=geom)
+
+    return pp.measurement_from_poses(meas, T_IB, geom=geom)
+
+
+def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5,
+              source=None):
     """
     Build an EKF seeded from the current drone attitude and the first
-    payload detection.
+    payload detection, from whichever tracker is running.
     """
+    source = config.EKF_SOURCE if source is None else source
     c = logger.cache
     phi, theta, psi = c["roll"], c["pitch"], c["yaw"]
     T_IB = ekf_lib.T_IB_fn(phi, theta, psi)
 
     deadline = time.time() + detect_timeout
     while True:
-        _, poses = recorder.latest_poses()
-        z = pp.measurement_from_poses(poses, T_IB)
+        _, meas = latest_measurement(recorder, source)
+        z = measurement_z(meas, T_IB, source)
         if z is not None:
-            return ekf_lib.EKF(phi, theta, psi, alpha_x, alpha_y,
-                               z[pp.IX_PSI_MEAS])
+            # a color ring carries no yaw to seed psi_p with, so it starts at 0
+            psi_p = (z[pp.IX_PSI_MEAS] if source == ekf_lib.SOURCE_ARUCO
+                     else 0)
+
+            return ekf_lib.EKF(phi, theta, psi, alpha_x, alpha_y, psi_p,
+                               source=source)
         if time.time() > deadline:
             raise RuntimeError(
                 f"no payload detection within {detect_timeout}s: the filter "
@@ -60,16 +94,20 @@ def accel_enu(cache):
     return a_I
 
 
-def step_ekf(ekf, poses, a_I, dt, phi, theta, psi):
+def step_ekf(ekf, meas, a_I, dt, phi, theta, psi):
     """
-    One predict, plus one update if a new camera frame is available
+    One predict, plus one update if a new camera frame is available.
+
+    meas is whatever the running tracker produced: the pose dict from
+    MarkerPoseRecorder, or the detection from ColorCircleRecorder.
     """
     ekf.T_IB = ekf_lib.T_IB_fn(phi, theta, psi)
+    ekf.innov = None
 
     xi, P = ekf.ekf_predict(ekf.xi, ekf.P, a_I, dt)
 
-    if poses:
-        z = pp.measurement_from_poses(poses, ekf.T_IB)
+    if meas:
+        z = measurement_z(meas, ekf.T_IB, ekf.source, geom=ekf.geom)
         if z is not None:
             xi, P = ekf.update_with_z(xi, P, z, ekf.T_IB)
 

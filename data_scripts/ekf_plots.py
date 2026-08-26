@@ -167,6 +167,12 @@ def analyze(session, verbose=True):
     """
     if not session.has_camera:
         raise SystemExit(f"session {session.id} has no camera data")
+    if session.tracker == "color":
+        raise SystemExit(
+            f"session {session.id} was tracked with a color ring, and the "
+            f"post-hoc filter reads marker poses. Its circles.csv holds the "
+            f"ring center in x,y,z, so a color replay is possible but is not "
+            f"written yet. Drop --post to draw the states the run logged.")
 
     geom = pp.Geometry.from_snapshot(session.config)
     offset = session.pose_offset
@@ -179,6 +185,7 @@ def analyze(session, verbose=True):
     records = run_full(frames, inp, offset, geom=geom,
                        hold=held_at(windows),
                        L=session.config["TETHER_LEN"],
+                       source=ekfm.SOURCE_ARUCO,
                        **ekf_tuning(session.config))
     meas_df = direct_measurement(frames, inp, offset, geom=geom)
     if verbose:
@@ -606,6 +613,24 @@ def _config_summary_lines(cfg):
     return lines
 
 
+def detections_by_frame(session):
+    """
+    How many detections each camera frame carried, from the tracker's own CSV.
+
+    A frame with nothing in it is still written, with the detection columns
+    left empty, so counting the filled ones is what says whether the filter
+    had anything to fold in.
+    """
+    col = "u_px" if session.tracker == "color" else "marker_id"
+    poses = session.poses
+    if col not in poses:
+        return {}
+
+    counts = poses.dropna(subset=[col]).groupby("frame").size()
+
+    return {int(f): int(k) for f, k in counts.items()}
+
+
 def logged_records(session):
     """
     The onboard EKF's own output, per camera frame, shaped like `run_full`.
@@ -614,12 +639,13 @@ def logged_records(session):
     reconstruction. `catalog.has_logged_covariance` gates psi_p and `P`: a
     flight recorded before those were logged gets psi_p=0 and P=None instead
     of a fabricated number. `P` is only the alpha_x/alpha_y/psi_p block, not
-    the full state covariance. `n` (markers seen) was never logged and stays
-    0, a placeholder, not "no detection".
+    the full state covariance. `n` counts what the tracker saw on that frame,
+    read back from its own CSV since the onboard log never recorded it.
     """
     fl = session.fl
     t = fl.cur_time.to_numpy()
     frames = session.poses.groupby("frame").time_s.first()
+    seen = detections_by_frame(session)
     has_cov = catalog.has_logged_covariance(fl)
 
     t_cam = frames.to_numpy(float)
@@ -653,7 +679,7 @@ def logged_records(session):
         sigma_ax = sigma_ay = sigma_pp = np.full(n, nan)
         P_at = lambda i: None
 
-    return [dict(frame=int(f), t_cam=tc, t_flight=tf, n=0,
+    return [dict(frame=int(f), t_cam=tc, t_flight=tf, n=seen.get(int(f), 0),
                  xi=xi[i], P=P_at(i), T_IB=ekfm.T_IB_fn(phi[i], theta[i], psi[i]),
                  alpha_x=xi[i, ekfm.IX_ALPHA_X], alpha_y=xi[i, ekfm.IX_ALPHA_Y],
                  alpha_dot_x=xi[i, ekfm.IX_ALPHA_DOT_X],
@@ -866,6 +892,7 @@ def overlay_video(session, records, save=None):
 
     K, D = _intrinsics()
     filt = make_ekf(0, 0, 0, 0, 0, 0, geom=geom,
+                    source=ekfm.SOURCE_ARUCO,
                     L=session.config.get("TETHER_LEN"))
     p_drone, _ = drone_states(session.fl, records)
     meas_by_frame = {r["frame"]: r["n"] for r in records}

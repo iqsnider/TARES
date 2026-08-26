@@ -1,9 +1,5 @@
 """
-Bench test for the colored-ring tracker.
-
-Holds the camera on a colored circle and streams the annotated view to
-CAM_PREVIEW_PORT, so you can see what the hue threshold is actually picking up
-and where it puts the center. Nothing else runs: no filter, no drone.
+test for the color ring tracker.
 """
 
 # autonomy research imports
@@ -19,10 +15,6 @@ if __name__ == '__main__':
     data_dir = f"data/color_track_{stamp}"
     video_out = f"{data_dir}/recording.avi"
     circles_out = f"{data_dir}/circles.csv"
-
-    if config.CAM_PREVIEW_PORT is None:
-        print("CAM_PREVIEW_PORT is None, so there is nothing to view; "
-              "set it in Prm/config.py")
 
     recorder = ColorCircleRecorder(
         circle_diameter_m=config.CIRCLE_DIAMETER,
@@ -40,6 +32,6 @@ if __name__ == '__main__':
         gain=config.CAM_GAIN,
         exposure_abs=config.CAM_EXP_ABS,
         preview_port=config.CAM_PREVIEW_PORT,
-        print_every=config.CAM_FPS)   # roughly one line a second
+        print_every=config.CAM_FPS)
 
     recorder.run()

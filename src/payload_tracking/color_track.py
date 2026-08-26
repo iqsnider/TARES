@@ -1,19 +1,3 @@
-"""
-Track a colored ring on the payload instead of ArUco markers.
-
-A ring only has to be segmented, not decoded, so it survives motion blur and
-distance that lose a marker: the payload disc spans far more pixels than a
-marker on it, and the center comes from averaging the whole boundary rather
-than localizing four corners.
-
-What it gives up is payload yaw -- a circle is rotationally symmetric -- which
-the outer loop does not use. What it gives back is the center bearing and, from
-the ring's apparent diameter, a range that does not depend on solving a pose
-from a handful of pixels.
-
-The camera plumbing (frame grabber, async writer, MJPEG preview) is shared with
-aruco_lib rather than copied, so a fix to any of it lands in both.
-"""
 import csv
 import json
 import os
@@ -45,7 +29,7 @@ class ColorCircleRecorder:
                  val_min=50,
                  min_area_px=150,
                  min_coverage_deg=200,         # how far the arc must wrap
-                 fit_tol_px=3.0,               # inlier band for the fit
+                 fit_tol_px=3,                 # inlier band for the fit
                  min_arc_pts=20,               # shortest contour worth fitting
                  max_fit_points=4000,
                  morph_px=3,                   # gap-closing kernel
@@ -88,9 +72,8 @@ class ColorCircleRecorder:
         self.frame_stride = max(1, int(frame_stride))
         self.fps = capture_fps / self.frame_stride
 
-        # a short exposure matters more here than for markers: auto-exposure
-        # also drifts the color balance, and a hue threshold set in one light
-        # will not hold in another
+        # auto exposure drifts the color balance, so a hue threshold set in one
+        # light will not hold in another
         self.exposure_abs = exposure_abs
         self.gain = gain
 
@@ -116,7 +99,8 @@ class ColorCircleRecorder:
         self.csv_writer = None
         self.frame_idx = 0
         self._t0 = None
-        self._latest = (-1, None)    # (frame_idx, detection) for the control loop
+        # (frame_idx, detection) for the control loop
+        self._latest = (-1, None)
 
         self._grabber = None
         self._awriter = None
@@ -124,7 +108,7 @@ class ColorCircleRecorder:
 
     def color_mask(self, frame):
         """
-        Pixels within the hue band, cleaned up.
+        Pixels within the hue band, cleaned up
         """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lo = (self.hue - self.hue_width) % 180
@@ -150,10 +134,8 @@ class ColorCircleRecorder:
     def edge_points(self, mask):
         """
         The mask's boundaries, as a list of arcs and one stacked point array.
-
-        Boundaries rather than regions, because the tether and the payload
-        below cut the ring into arcs. Three points fix a circle, so an arc is
-        as good as a whole ring -- which is what a region test cannot survive.
+        Boundaries rather than regions, because the tether and the payload cut
+        the ring into arcs and three points still fix a circle.
         """
         contours, _ = cv2.findContours(mask, cv2.RETR_LIST,
                                        cv2.CHAIN_APPROX_NONE)
@@ -171,42 +153,52 @@ class ColorCircleRecorder:
     @staticmethod
     def _refit(pts):
         """
-        Least-squares circle through points, minimizing algebraic distance.
+        Least-squares circle through points, minimizing algebraic distance
         """
         x, y = pts[:, 0], pts[:, 1]
         A = np.column_stack([x, y, np.ones(len(x))])
         sol, *_ = np.linalg.lstsq(A, x*x + y*y, rcond=None)
-        cx, cy = sol[0]/2, sol[1]/2
 
-        return cx, cy, np.sqrt(max(sol[2] + cx*cx + cy*cy, 0))
+        cx, cy = sol[0]/2, sol[1]/2
+        r = np.sqrt(max(sol[2] + cx*cx + cy*cy, 0))
+
+        return cx, cy, r
 
     @staticmethod
     def _coverage_deg(pts, cx, cy, bins=36):
         """
-        How much of the circle the points actually wrap around, in degrees.
-
-        A center fit from a short arc is badly conditioned however many points
-        it holds, so this is the number that says whether to trust it -- not
-        the inlier count.
+        How far the points wrap around the circle, in degrees. A center fit
+        from a short arc is badly conditioned however many points it holds,
+        so this says whether to trust it, not the inlier count.
         """
         ang = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)
         hit = np.zeros(bins, dtype=bool)
         hit[((ang + np.pi)/(2*np.pi)*bins).astype(int) % bins] = True
 
-        return 360.0*hit.sum()/bins
+        coverage = 360*hit.sum()/bins
+
+        return coverage
+
+    def _inliers(self, pts, cx, cy, r):
+        """
+        Points on the band, given a circle through it. The tolerance spans the
+        whole band on purpose: cut the ring and each piece becomes one contour
+        tracing both edges and two end caps, whose fit sits mid band.
+        """
+        band_px = 2*r*self.band_m/self.circle_diameter_m
+        tol = max(self.fit_tol_px, band_px)
+
+        on_band = np.abs(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r) < tol
+
+        return on_band
 
     def fit_circle(self, arcs, pts):
         """
-        Circle through the ring's arcs, seeded from the arcs themselves.
-
-        Every contour is already a connected run of boundary, so each one is a
-        candidate arc of the circle -- no random sampling needed. Fit each,
-        score it by how many of all the points it collects, and refit on the
-        winner's inliers, which merges arcs the occlusion split apart.
-
-        Random three-point RANSAC was the obvious approach and it failed on
-        real footage: speckle elsewhere in the room outnumbered the ring, and
-        the odds of drawing three points from the same edge were 2% a go.
+        Circle through the ring's arcs, seeded from the arcs themselves. Every
+        contour is a connected run of boundary, so each is a candidate arc: fit
+        it, score it by the points it collects, refit on the winner's inliers.
+        Random three point sampling failed here, since speckle elsewhere in the
+        frame outnumbered the ring.
         """
         r_min = np.sqrt(self.min_area_px/np.pi)
         r_max = 0.5*np.hypot(self.width, self.height)
@@ -230,33 +222,20 @@ class ColorCircleRecorder:
         inl = self._inliers(pts, cx, cy, r)
         if inl.sum() < 8:
             return None
+
         cx, cy, r = self._refit(pts[inl])
         if not r_min <= r <= r_max:
             return None
 
-        return cx, cy, r, pts[inl]
+        inliers = pts[inl]
 
-    def _inliers(self, pts, cx, cy, r):
-        """
-        Points on the band, given a circle through it.
-
-        The tolerance spans the whole band on purpose. Cut the ring anywhere
-        and each piece becomes one contour tracing its outer edge, its inner
-        edge and both end caps -- a mixture of radii whose fit sits mid-band.
-        A tolerance narrower than the band would collect none of it.
-        """
-        band_px = 2*r*self.band_m/self.circle_diameter_m
-        tol = max(self.fit_tol_px, band_px)
-
-        return np.abs(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r) < tol
+        return cx, cy, r, inliers
 
     def detect(self, frame):
         """
         The ring's center and where it puts the payload in the camera frame.
-
-        Returns None when no arc of that color wraps far enough around a circle
-        to place its center. Survives the tether crossing the ring and the
-        payload hiding part of it, since only the visible arc is fitted.
+        None when no arc of that color wraps far enough around a circle to
+        place its center.
         """
         mask = self.color_mask(frame)
         arcs, pts = self.edge_points(mask)
@@ -272,24 +251,24 @@ class ColorCircleRecorder:
         if coverage < self.min_coverage_deg:
             return None
 
-        # the fit sits on the band centerline, since the tolerance spans the
-        # whole band, so the centerline diameter is what the radius measures
+        # the tolerance spans the band, so the fit sits on its centerline
         range_m = self.focal_px*(self.circle_diameter_m - self.band_m)/(2*r)
 
-        # pixel -> unit ray, lens distortion undone, then out to the range the
-        # apparent diameter implies
+        # pixel to unit ray, lens distortion undone, then out to that range
         xy = cv2.undistortPoints(np.array([[[cx, cy]]], dtype=np.float64),
                                  self.mtx, self.dist).ravel()
-        ray = np.array([xy[0], xy[1], 1.0])
+        ray = np.array([xy[0], xy[1], 1])
         ray /= np.linalg.norm(ray)
         p_C = range_m*ray
 
-        return dict(u=cx, v=cy, radius=r, coverage=coverage,
-                    n_inliers=int(len(inliers)), range_m=range_m, p_C=p_C)
+        det = dict(u=cx, v=cy, radius=r, coverage=coverage,
+                   n_inliers=int(len(inliers)), range_m=range_m, p_C=p_C)
+
+        return det
 
     def annotate(self, frame, det):
         """
-        Draw the fitted circle and its center, with range and arc coverage.
+        Draw the fitted circle and its center, with range and arc coverage
         """
         c = (int(round(det["u"])), int(round(det["v"])))
         cv2.circle(frame, c, int(round(det["radius"])), (60, 255, 80), 2,
@@ -304,14 +283,13 @@ class ColorCircleRecorder:
                     (60, 255, 80), 2, cv2.LINE_AA)
 
     def _set_camera_controls(self, camera_index):
-        """Pin exposure and gain via v4l2-ctl.
-
-        Must run after the stream is live: setting the format resets controls
-        on many UVC drivers. On a mac there is no v4l2, so set them with
-        uvc-util instead and the camera keeps whatever it is already on.
+        """
+        Pin exposure and gain via v4l2-ctl. Must run after the stream is live,
+        since setting the format resets controls on many UVC drivers. There is
+        no v4l2 on a mac, where uvc-util sets the same controls by hand.
         """
         if shutil.which("v4l2-ctl") is None:
-            print("v4l2-ctl not found -- exposure and gain left as they are")
+            print("v4l2-ctl not found, exposure and gain left as they are")
             return
 
         dev = f"/dev/video{camera_index}"
@@ -329,7 +307,9 @@ class ColorCircleRecorder:
         print(readback.stdout.strip())
 
     def open(self, camera_index=0):
-        """Open the camera and the output video/CSV files."""
+        """
+        Open the camera and the output video/CSV files
+        """
         # before the VideoWriter: given a path it cannot write, OpenCV falls
         # back to its image-sequence writer and warns instead of failing
         os.makedirs(os.path.dirname(self.video_out) or ".", exist_ok=True)
@@ -343,7 +323,7 @@ class ColorCircleRecorder:
         self.cap.set(cv2.CAP_PROP_FPS, self.capture_fps)
 
         frame = None
-        deadline = time.time() + 3.0
+        deadline = time.time() + 3
         while time.time() < deadline:
             try:
                 ok, f = self.cap.read()
@@ -368,13 +348,14 @@ class ColorCircleRecorder:
         if self.frame_stride > 1:
             print(f"stride {self.frame_stride} -> recording at {self.fps:g} fps")
         assert (w, h) == (self.width, self.height), \
-            f"requested {self.width}x{self.height}, got {w}x{h}; range will be wrong"
+            f"requested {self.width}x{self.height}, got {w}x{h}; range wrong"
 
         self._set_camera_controls(camera_index)
 
         self.writer = cv2.VideoWriter(
             self.video_out, cv2.VideoWriter_fourcc(*"MJPG"), self.fps, (w, h))
-        self._awriter = _AsyncWriter(self.writer, maxsize=self.write_queue_size)
+        self._awriter = _AsyncWriter(self.writer,
+                                     maxsize=self.write_queue_size)
         self._awriter.start()
 
         if self.preview_port is not None:
@@ -395,11 +376,12 @@ class ColorCircleRecorder:
         self.frame_idx = 0
         self._latest = (-1, None)
         self._t0 = time.time()
+
         return self
 
     def process_frame(self, frame):
         """
-        Find the ring, annotate the frame, write the video and a CSV row.
+        Find the ring, annotate the frame, write the video and a CSV row
         """
         det = self.detect(frame)
         if det is not None:
@@ -439,16 +421,15 @@ class ColorCircleRecorder:
     def latest_detection(self):
         """
         Most recent (frame_idx, detection) for a consumer on another thread.
-
-        Same contract as MarkerPoseRecorder.latest_poses: a single atomic tuple
-        rebind, and the frame_idx lets a faster consumer tell a new detection
-        from one it has already used. The detection is None when the last frame
-        had no ring in it.
+        Same contract as MarkerPoseRecorder.latest_poses, and the detection is
+        None when the last frame had no ring in it.
         """
         return self._latest
 
     def run(self, camera_index=0):
-        """Open everything and record until Ctrl+C or camera failure."""
+        """
+        Open everything and record until Ctrl+C or camera failure
+        """
         self._stop_requested = False
 
         def _on_sigint(signum, frame):
@@ -513,7 +494,7 @@ class ColorCircleRecorder:
         if self._awriter is not None:
             self._awriter.close()
             if self._awriter.max_depth >= self.write_queue_size - 1:
-                print("warning: video write queue saturated -- encode is a "
+                print("warning: video write queue saturated, encode is a "
                       "bottleneck; lower resolution or raise write_queue_size")
             self._awriter = None
         if self.cap is not None:
@@ -532,13 +513,13 @@ class ColorCircleRecorder:
             print(f"saved {self.frame_idx} frames to {self.video_out} "
                   f"and circles to {self.csv_out}")
             print(f"achieved {achieved:.1f} fps "
-                  f"(video header says {self.fps:g} fps -- "
+                  f"(video header says {self.fps:g} fps, "
                   f"CSV time_s is the ground truth)")
             attempted = grabbed_ok + dropped
             if dropped:
                 pct = 100*dropped/attempted if attempted else 0
                 print(f"dropped {dropped} of {attempted} frames at the camera "
-                      f"read ({pct:.0f}%) -- empty/corrupt buffers, not a code error")
+                      f"read ({pct:.0f}%), empty or corrupt buffers")
 
     def __enter__(self):
         return self

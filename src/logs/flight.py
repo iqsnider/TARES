@@ -23,6 +23,7 @@ COLUMNS = [
     "payload_alpha_x", "payload_alpha_y",
     "payload_alphadot_x", "payload_alphadot_y",
     "payload_psi_p", "payload_range_meas",
+    "payload_innov_x", "payload_innov_y", "payload_innov_psi",
     "payload_cov_axx", "payload_cov_ayy", "payload_cov_axy",
     "payload_cov_psipsi",
     "ux", "uy", "uz", "yaw_ref", "yaw_rate_ref",
@@ -236,7 +237,8 @@ class FlightLogger:
             yaw_ref=0, yaw_rate_ref=0,
             payload_p_ref=None, payload_v_ref=None,
             payload_alpha=None, payload_alphadot=None,
-            payload_psi_p=None, payload_range=None, payload_cov=None):
+            payload_psi_p=None, payload_range=None,
+            payload_innov=None, payload_cov=None):
         """
         Call once per control tick, AFTER send_accel/note_sent.
           t: loop time since start (control loop's `t`)
@@ -247,6 +249,9 @@ class FlightLogger:
           payload_psi_p: payload yaw estimate [rad]
           payload_range: camera range from the tether pivot to the payload
             center [m], the raw measurement, not an estimate
+          payload_innov: (b_x, b_y, psi_p) measured minus predicted, the
+            residual the filter corrected on. NaN on a tick with no
+            measurement, which is how a blackout reads
           payload_cov: (Pxx, Pyy, Pxy, Ppp), the alpha_x/alpha_y/psi_p block
             of the EKF covariance, not the full state covariance
         """
@@ -269,6 +274,9 @@ class FlightLogger:
             NAN, NAN)
         pl_psi = payload_psi_p if payload_psi_p is not None else NAN
         pl_rng = payload_range if payload_range is not None else NAN
+        # a color tracker measures no yaw, so its innovation is two long
+        pl_inn = ((NAN,)*3 if payload_innov is None else
+                  tuple(payload_innov) + (NAN,)*(3 - len(payload_innov)))
         pl_cov = payload_cov if payload_cov is not None else (NAN, NAN, NAN, NAN)
         hb_age = now - \
             c["last_hb_wall"] if c["last_hb_wall"] is not None else NAN
@@ -296,6 +304,8 @@ class FlightLogger:
             "payload_alpha_x": pl_a[0], "payload_alpha_y": pl_a[1],
             "payload_alphadot_x": pl_ad[0], "payload_alphadot_y": pl_ad[1],
             "payload_psi_p": pl_psi, "payload_range_meas": pl_rng,
+            "payload_innov_x": pl_inn[0], "payload_innov_y": pl_inn[1],
+            "payload_innov_psi": pl_inn[2],
             "payload_cov_axx": pl_cov[0], "payload_cov_ayy": pl_cov[1],
             "payload_cov_axy": pl_cov[2], "payload_cov_psipsi": pl_cov[3],
             # control input

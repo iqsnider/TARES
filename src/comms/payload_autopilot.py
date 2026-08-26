@@ -45,17 +45,11 @@ class StickControl(ControlComms):
         self.video_out = video_out
         self.poses_out = poses_out
 
-        # initialize marker tracking
-        self.track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID, config.RIGHT_MARKER_ID]
-        self.recorder, self.cam_thread = cam.start_camera(marker_size_m=config.MARKER_EDGE_LEN,
-                                                video_out=self.video_out,
-                                                csv_out=self.poses_out,
-                                                marker_ids=self.track_marker_ids,
-                                                preview_port=config.CAM_PREVIEW_PORT,
-                                                capture_fps=config.CAM_FPS,
-                                                frame_stride=config.CAM_STRIDE,
-                                                gain=config.CAM_GAIN,
-                                                exposure_abs=config.CAM_EXP_ABS)
+        # initialize payload tracking, markers or a color ring per EKF_SOURCE
+        self.recorder, self.cam_thread = cam.start_payload_camera(
+            video_out=self.video_out,
+            csv_out=self.poses_out,
+            preview_port=config.CAM_PREVIEW_PORT)
 
         # initialize payload state estimator
         self.ekf = est.start_ekf(self.logger, recorder=self.recorder)
@@ -96,8 +90,8 @@ class StickControl(ControlComms):
         self.logger.pump(self.m)
         c = self.logger.cache
         x = self.get_state_enu(c['ned'], prev=x)
-        last_seq, poses = self.recorder.latest_poses()
-        xi, _ = est.step_ekf(self.ekf, poses, est.accel_enu(c), dt,
+        last_seq, meas = est.latest_measurement(self.recorder, self.ekf.source)
+        xi, _ = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt,
                              c['roll'], c['pitch'], c['yaw'])
         self.ref_position = x[0:3] + L*np.array([xi[0], xi[1], -1])
         self.ref_velocity = np.zeros(3)
@@ -119,9 +113,9 @@ class StickControl(ControlComms):
             x = self.get_state_enu(c['ned'], prev=x)
 
             # fold in the camera only when the frame is new
-            seq, poses = self.recorder.latest_poses()
+            seq, meas = est.latest_measurement(self.recorder, self.ekf.source)
             if seq == last_seq:
-                poses = None
+                meas = None
             else:
                 last_seq = seq
 
@@ -130,7 +124,7 @@ class StickControl(ControlComms):
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, _ = est.step_ekf(self.ekf, poses, est.accel_enu(c), dt_ekf,
+            xi, _ = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # generate the payload reference from the stick inputs
@@ -153,7 +147,8 @@ class StickControl(ControlComms):
                             payload_p_ref=p_ref,
                             payload_v_ref=v_ref,
                             payload_alpha=(xi[0], xi[1]),
-                            payload_alphadot=(xi[2], xi[3]))
+                            payload_alphadot=(xi[2], xi[3]),
+                            payload_innov=self.ekf.innov)
 
             # set the mode
             self.mode = c["echoed_mode"]

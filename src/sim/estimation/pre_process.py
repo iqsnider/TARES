@@ -216,6 +216,24 @@ def range_from_poses(poses, geom=DEFAULT_GEOMETRY):
     return r
 
 
+def measurement_from_circle(p_C, geom=DEFAULT_GEOMETRY):
+    """
+    EKF measurement from a color ring detection, which is bearing only.
+
+    p_C is the ring center in the camera frame, straight off
+    ColorCircleRecorder.detect. A circle is symmetric, so there is no payload
+    yaw in it and the measurement is two long instead of three.
+    """
+    if p_C is None:
+        return None
+
+    b = shift_origin(p_C, geom=geom)
+
+    z = np.array([b[IX_B_X], b[IX_B_Y]])
+
+    return z
+
+
 def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):
     """
     One camera frame (alpha_x, alpha_y, psi_P), or None with no detection

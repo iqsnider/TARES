@@ -313,9 +313,9 @@ class ControlComms:
             x = self.get_state_enu(c['ned'], prev=x)
 
             # fold in the camera only when the frame is new
-            seq, poses = recorder.latest_poses()
+            seq, meas = est.latest_measurement(recorder, ekf.source)
             if seq == last_seq:
-                poses = None
+                meas = None
             else:
                 last_seq = seq
 
@@ -323,7 +323,7 @@ class ControlComms:
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, P = est.step_ekf(ekf, poses, est.accel_enu(c), dt_ekf,
+            xi, P = est.step_ekf(ekf, meas, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # payload reference, lifted to the drone equilibrium
@@ -353,6 +353,7 @@ class ControlComms:
                             payload_alpha=(xi[0], xi[1]),
                             payload_alphadot=(xi[2], xi[3]),
                             payload_psi_p=xi[ekfm.IX_PSI_P],
+                            payload_innov=ekf.innov,
                             payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
                                         P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
                                         P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],

@@ -20,6 +20,12 @@ IX_ALPHA_X, IX_ALPHA_Y, IX_ALPHA_DOT_X, IX_ALPHA_DOT_Y, IX_PSI_P = range(
 MEAS_DIM = pp.MEAS_DIM
 IX_B_X, IX_B_Y, IX_PSI_MEAS = pp.IX_B_X, pp.IX_B_Y, pp.IX_PSI_MEAS
 
+# which tracker feeds the filter. A marker board carries an orientation, so it
+# measures payload yaw as well as bearing; a circle is symmetric and does not
+SOURCE_ARUCO = "aruco"
+SOURCE_COLOR = "color"
+MEAS_DIM_BY_SOURCE = {SOURCE_ARUCO: 3, SOURCE_COLOR: 2}
+
 
 def wrap_pi(a):
     """
@@ -63,6 +69,7 @@ class EKF:
                  sigma_rate_0=None,  # initial swing rate 1-sigma [rad/s]
                  sigma_psi_p_0=None,  # initial payload yaw 1-sigma [rad]
                  zeta=None,  # swing damping ratio
+                 source=None,  # aruco or color
                  L=None, g=None, geom=None):
 
         # default to live Prm/config.py; pass these explicitly to replay a
@@ -88,6 +95,12 @@ class EKF:
         self.q_yaw = config.EKF_Q_YAW if q_yaw is None else q_yaw
         self.sigma_xy = config.EKF_SIGMA_XY if sigma_xy is None else sigma_xy
         self.sigma_yaw = config.EKF_SIGMA_YAW if sigma_yaw is None else sigma_yaw
+
+        self.source = config.EKF_SOURCE if source is None else source
+        self.meas_dim = MEAS_DIM_BY_SOURCE[self.source]
+
+        # last measured minus predicted, None until a measurement lands
+        self.innov = None
 
         # initialize EKF
         self.T_IB = T_IB_fn(initial_phi, initial_theta, initial_psi)
@@ -155,7 +168,9 @@ class EKF:
 
     def measurement_prediction(self, xi, T_BI):
         """
-        Predicted measurement h and Jacobian H for one camera frame.
+        Predicted measurement h and Jacobian H for one camera frame. Both are
+        cut to the tracker's width, so a color source drops the yaw row it
+        cannot measure.
         """
         alpha_x, alpha_y, _, _, psi_p = xi
         A = self.T_CB @ T_BI
@@ -169,7 +184,9 @@ class EKF:
         H[0:2, IX_ALPHA_X:IX_ALPHA_Y+1] = A[0:2, 0:2]
         H[IX_PSI_MEAS, IX_PSI_P] = 1
 
-        return h, H
+        rows = self.meas_dim
+
+        return h[:rows], H[:rows]
 
     @staticmethod
     def q_I(alpha_x, alpha_y):
@@ -198,14 +215,19 @@ class EKF:
         T_BI = T_IB.T
         h, H = self.measurement_prediction(xi, T_BI)
 
-        # innovation, yaw wrapped
+        # innovation, yaw wrapped when the tracker measures one
         y = z - h
-        y[IX_PSI_MEAS] = wrap_pi(y[IX_PSI_MEAS])
+        if self.meas_dim > IX_PSI_MEAS:
+            y[IX_PSI_MEAS] = wrap_pi(y[IX_PSI_MEAS])
+
+        # measured minus predicted, kept so a caller can log what the camera
+        # disagreed with the model about
+        self.innov = y.copy()
 
         # measurement noise
         R = np.diag([self.sigma_xy**2,
                      self.sigma_xy**2,
-                     self.sigma_yaw**2])
+                     self.sigma_yaw**2][:self.meas_dim])
 
         # innovation covariance
         S = H @ P @ H.T + R

@@ -60,16 +60,16 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 CAM_GAIN = 1
 _cam_exp_abs_by_airframe = {"AURELIA_X4": 2, "IF1200": 2, "EKF_TEST": 2}
 CAM_EXP_ABS = _cam_exp_abs_by_airframe[AIRFRAME]
-CAM_PREVIEW_PORT = 8080  # None  # 8080
+CAM_PREVIEW_PORT = None  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1
 
 
 # camera offsets, referenced to the front of the drone and CoG [m]
 _cam_offset_x_by_airframe = {"AURELIA_X4": -0.34, "IF1200": -0.1,
-                             "EKF_TEST": 0.045}  # 0.11
+                             "EKF_TEST": 0}  # 0.11
 _cam_offset_y_by_airframe = {"AURELIA_X4": 0.12, "IF1200": -0.154,
-                             "EKF_TEST": -0.01}  # 0.22
+                             "EKF_TEST": 0}  # 0.22
 _cam_offset_z_by_airframe = {"AURELIA_X4": -0.05, "IF1200": -0.1,
                              "EKF_TEST": 0}
 CAM_OFFSET_X = _cam_offset_x_by_airframe[AIRFRAME]
@@ -115,8 +115,8 @@ CENTER_MARKER_ID = 245
 RIGHT_MARKER_ID = 233
 
 # payload color ring parameters (payload_tracking/color_track.py)
-CIRCLE_DIAMETER = 0.3  # [m] outer diameter of the ring
-CIRCLE_BAND = 0.03  # [m] width of the colored band
+CIRCLE_DIAMETER = 0.31  # [m] outer diameter of the ring
+CIRCLE_BAND = 0.11  # [m] width of the colored band
 # hue is 0-179 in OpenCV, and red straddles 0, which color_mask wraps for.
 # Dry grass and bare soil sit close to red in hue, so saturation is what
 # separates the tape from the ground rather than hue
@@ -199,6 +199,10 @@ _lqi_payload_u_i_max_by_airframe = {"AURELIA_X4": 1.5, "IF1200": 2,
 LQI_PAYLOAD_U_I_MAX = _lqi_payload_u_i_max_by_airframe[AIRFRAME]
 
 ##### payload swing EKF tuning (sim/estimation/ekf.py) #####
+
+# which tracker feeds the filter, "aruco" or "color". The color ring gives no
+# payload yaw, so psi_p goes unobserved and only the swing angles are measured
+EKF_SOURCE = "color"
 
 # process noise on alpha_ddot_xy and on psi_p
 _ekf_q_xy_by_airframe = {"AURELIA_X4": (0.02)**2, "IF1200": (0.02)**2,

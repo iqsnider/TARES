@@ -1,17 +1,13 @@
 """
-Bench test for the payload EKF with no flight controller attached.
-
-The camera is held by hand above a dangling payload, so the drone is pretended
-stationary and level and every drone state is zero. The middle window drops the
-measurements, leaving the filter to coast on its prediction, and the last one
-brings them back so the correction can be seen.
+test for the payload EKF with no flight controller attached.
 """
 
 # autonomy research imports
+import comms.camera as cam
 import comms.estimator as est
+import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
 import Prm.config as config
-import comms.camera as cam
 
 # logging
 from logs.flight import FlightLogger
@@ -26,33 +22,45 @@ import numpy as np
 WINDOW_S = 20
 
 
+def payload_range(meas):
+    """
+    Pivot to payload distance, however the running tracker reports it.
+
+    The filter normalizes this away, so it is only read here: hang the payload
+    still and it is the rope length.
+    """
+    if not meas:
+        return None
+
+    if config.EKF_SOURCE == ekfm.SOURCE_COLOR:
+        return float(np.linalg.norm(pp.pivot_to_payload(meas["p_C"])))
+
+    return pp.range_from_poses(meas)
+
+
 if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
     dt = 1/control_freq
+    source = config.EKF_SOURCE
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pendulum_ekf_{stamp}"
+    data_dir = f"data/pendulum_{source}_{stamp}"
     video_out = f"{data_dir}/recording.avi"
-    poses_out = f"{data_dir}/poses.csv"
+    track_out = f"{data_dir}/{'circles' if source == 'color' else 'poses'}.csv"
 
-    track_marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID,
-                        config.RIGHT_MARKER_ID]   # only these are logged; others dropped
-    # start camera first
-    recorder, cam_thread = cam.start_camera(
-        marker_size_m=config.MARKER_EDGE_LEN,
+    print(f"tracking with {source}")
+
+    # start the camera first, markers or color per EKF_SOURCE
+    recorder, cam_thread = cam.start_payload_camera(
         video_out=video_out,
-        csv_out=poses_out,
-        marker_ids=track_marker_ids,
-        preview_port=config.CAM_PREVIEW_PORT,
-        capture_fps=config.CAM_FPS,
-        frame_stride=config.CAM_STRIDE,
-        gain=config.CAM_GAIN,
-        exposure_abs=config.CAM_EXP_ABS)
+        csv_out=track_out,
+        preview_port=config.CAM_PREVIEW_PORT)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
 
-    # seed the cache the EKF and the logger read from with a level, stationary drone instead of pumping it
+    # seed the cache the EKF and the logger read from with a level, stationary
+    # drone instead of pumping it
     c = logger.cache
     c["roll"], c["pitch"], c["yaw"], c["yaw_rate"] = 0, 0, 0, 0
     c["ned"] = (0,)*6
@@ -81,35 +89,36 @@ if __name__ == '__main__':
                 print("measurements HELD" if hold else "measurements LIVE")
                 was_held = hold
 
-            # don't add stale camera frames
-            seq, poses = recorder.latest_poses()
+            # don't fold in a frame the filter has already used
+            seq, meas = est.latest_measurement(recorder, ekf.source)
             if seq == last_seq:
-                poses = None
+                meas = None
             else:
                 last_seq = seq
 
             # predict only while held
             if hold:
-                poses = None
+                meas = None
 
             # ekf dt
             dt_ekf = dt if t_prev is None else t - t_prev
             t_prev = t
 
-            xi, P = est.step_ekf(ekf, poses, a_I, dt_ekf, 0, 0, 0)
+            xi, P = est.step_ekf(ekf, meas, a_I, dt_ekf, 0, 0, 0)
 
-            # raw camera range to the payload, which is the rope length once
-            # it hangs still. The filter normalizes this away, so read it here
-            rng = pp.range_from_poses(poses)
+            rng = payload_range(meas)
             if rng is not None:
                 ranges.append(rng)
 
             n += 1
             if n % (control_freq//2) == 0:
-                print(f"t {t:6.1f}  alpha {np.degrees(xi[0]):7.2f} {np.degrees(xi[1]):7.2f} deg  "
-                      f"sigma {np.degrees(np.sqrt(P[0, 0])):5.2f} {
-                    np.degrees(np.sqrt(P[1, 1])):5.2f} deg"
-                    f"  range {rng if rng is not None else float('nan'):5.3f} m"
+                print(f"t {t:6.1f}  "
+                      f"alpha {np.degrees(xi[0]):7.2f} {
+                    np.degrees(xi[1]):7.2f} deg  "
+                    f"sigma {np.degrees(np.sqrt(P[0, 0])):5.2f} "
+                    f"{np.degrees(np.sqrt(P[1, 1])):5.2f} deg  "
+                    f"range {
+                          rng if rng is not None else float('nan'):5.3f} m"
                     f"{'  HELD' if hold else ''}")
 
             # no setpoints go out here, so sent_mode carries the hold flag
