@@ -1,6 +1,7 @@
 import cv2
 import csv
 import json
+from collections import deque
 import time
 import queue
 import shutil
@@ -15,23 +16,28 @@ import os
 
 NAN = float("nan")
 
+# exposure_abs=AUTO hands exposure back to the camera. None means leave the
+# exposure alone, which is what a gain-only change wants
+AUTO = "auto"
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CALIB = os.path.join(_HERE, "camera_calibration/calibration.json")
 
 
 def apply_camera_controls(camera_index, exposure_abs=None, gain=None):
     """
-    Pin exposure and gain on a camera that is already streaming.
+    Set exposure or gain on a camera that is already streaming.
 
-    v4l2-ctl on linux, uvc-util on a mac, which take the same values under
-    different names. An exposure of None puts the camera back on auto.
-    Returns whatever the tool reads back afterwards.
+    Only what is passed gets touched, so moving the gain leaves the exposure
+    mode alone. Pass exposure_abs=AUTO to hand exposure back to the camera.
+    v4l2-ctl on linux, uvc-util on a mac. Returns the tool's readback.
     """
     if shutil.which("v4l2-ctl"):
         dev = f"/dev/video{camera_index}"
-        if exposure_abs is None:
+        if exposure_abs is AUTO:
             subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=0"])
-        else:
+        elif exposure_abs is not None:
+            # exposure_time_absolute stays inactive until the mode is manual
             subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=1"])
             subprocess.run(["v4l2-ctl", "-d", dev, "-c",
                             f"exposure_time_absolute={int(exposure_abs)}"])
@@ -46,12 +52,12 @@ def apply_camera_controls(camera_index, exposure_abs=None, gain=None):
 
     if shutil.which("uvc-util"):
         dev = ["-I", str(camera_index)]
-        if exposure_abs is None:
+        if exposure_abs is AUTO:
             # the tool clamps this control to its own broken 0..1 range, so
             # only the default keyword reaches the camera's auto mode
             subprocess.run(["uvc-util", *dev, "-s",
                             "auto-exposure-mode=default"])
-        else:
+        elif exposure_abs is not None:
             subprocess.run(["uvc-util", *dev, "-s", "auto-exposure-mode=1"])
             subprocess.run(["uvc-util", *dev, "-s",
                             f"exposure-time-abs={int(exposure_abs)}"])
@@ -183,12 +189,14 @@ class _MJPEGPreview:
 
     def __init__(self, port=8080, host="0.0.0.0",
                  max_width=960, fps=12, quality=60,
-                 on_control=None, exposure_abs=None, gain=None,
+                 on_control=None, on_stats=None,
+                 exposure_abs=None, gain=None,
                  exposure_range=(1, 500), gain_range=(1, 100)):
         self.port = int(port)
         self.host = host
         # set by the page's sliders while the camera runs
         self.on_control = on_control
+        self.on_stats = on_stats
         self.exposure_abs = exposure_abs
         self.gain = gain
         self.exposure_range = exposure_range
@@ -259,7 +267,9 @@ class _MJPEGPreview:
  input[type=range] {{ width:70%; vertical-align:middle }}
  b {{ display:inline-block; min-width:4em; color:#6f6 }}
  pre {{ color:#888; font-size:12px; white-space:pre-wrap }}
+ #stats {{ color:#6cf; font-size:14px; padding-bottom:6px }}
 </style>
+<div id="stats">measuring</div>
 <img src="/stream.mjpg">
 <label>exposure <b id="ev">{e}</b> x100us
  <input type=range id=e min={e_lo} max={e_hi} value={e}></label>
@@ -267,7 +277,9 @@ class _MJPEGPreview:
  <input type=range id=g min={g_lo} max={g_hi} value={g}></label>
 <pre id="out"></pre>
 <script>
- const out = document.getElementById("out");
+ const out = document.getElementById("out"), stats = document.getElementById("stats");
+ setInterval(() => fetch("/stats").then(r => r.text())
+                                  .then(t => stats.textContent = t), 1000);
  function send(k, v) {{
    fetch("/set?" + k + "=" + v).then(r => r.text()).then(t => out.textContent = t);
  }}
@@ -291,6 +303,9 @@ class _MJPEGPreview:
                     self.send_text(preview.page(), "text/html")
                 elif path in ("/stream", "/stream.mjpg"):
                     self.stream()
+                elif path == "/stats":
+                    self.send_text(preview.on_stats() if preview.on_stats
+                                   else "no camera attached")
                 elif path == "/set":
                     self.set_control(query)
                 else:
@@ -458,6 +473,8 @@ class MarkerPoseRecorder:
         self.csv_writer = None
         self.frame_idx = 0
         self._t0 = None
+        # recent frame times, for a live rate rather than the average so far
+        self._frame_times = deque(maxlen=64)
         self._latest = (-1, {})      # (frame_idx, poses) for the control loop
 
         # threading handles
@@ -498,7 +515,10 @@ class MarkerPoseRecorder:
         after the stream is live: setting the format triggers VIDIOC_S_FMT,
         which resets controls on many UVC drivers.
         """
-        print(apply_camera_controls(camera_index, self.exposure_abs, self.gain))
+        print(apply_camera_controls(
+            camera_index,
+            AUTO if self.exposure_abs is None else self.exposure_abs,
+            self.gain))
 
     def set_controls(self, exposure_abs=None, gain=None):
         """Change exposure or gain while recording, from the preview sliders."""
@@ -568,7 +588,7 @@ class MarkerPoseRecorder:
             self._preview = _MJPEGPreview(
                 port=self.preview_port, max_width=self.preview_width,
                 fps=self.preview_fps, quality=self.preview_quality,
-                on_control=self.set_controls,
+                on_control=self.set_controls, on_stats=self.stats_line,
                 exposure_abs=self.exposure_abs, gain=self.gain)
             self._preview.start()
             print(f"live preview: http://<co-computer-ip>:{self.preview_port}/  "
@@ -637,6 +657,7 @@ class MarkerPoseRecorder:
                 [self.frame_idx, f"{now:.4f}", f"{t:.4f}", nan,
                  nan, nan, nan, nan, nan, nan, nan, nan, nan])
 
+        self._frame_times.append(now)
         if self._preview is not None:
             self._preview.update(frame)      # before submit: stays live under writer backpressure
         # publish before submit(): submit() blocks under writer backpressure,
@@ -645,6 +666,27 @@ class MarkerPoseRecorder:
         self._awriter.submit(frame)
         self.frame_idx += 1
         return poses
+
+    def fps_now(self):
+        """
+        Frames per second over the last few dozen frames, 0 before there are two
+        """
+        t = self._frame_times
+        if len(t) < 2 or t[-1] <= t[0]:
+            return 0
+
+        rate = (len(t) - 1)/(t[-1] - t[0])
+
+        return rate
+
+    def stats_line(self):
+        """
+        One line of live status for the preview page
+        """
+        dropped = self._grabber.dropped if self._grabber is not None else 0
+
+        return (f"{self.fps_now():.1f} fps   frame {self.frame_idx}   "
+                f"dropped {dropped}")
 
     def latest_poses(self):
         """Most recent (frame_idx, poses) for a consumer on another thread.

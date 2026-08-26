@@ -1,5 +1,6 @@
 import csv
 import json
+from collections import deque
 import os
 import shutil
 import signal
@@ -9,7 +10,7 @@ import time
 import cv2
 import numpy as np
 
-from payload_tracking.aruco_lib import (_AsyncWriter, _FrameGrabber,
+from payload_tracking.aruco_lib import (AUTO, _AsyncWriter, _FrameGrabber,
                                         _MJPEGPreview, apply_camera_controls)
 
 NAN = float("nan")
@@ -100,6 +101,8 @@ class ColorCircleRecorder:
         self.csv_writer = None
         self.frame_idx = 0
         self._t0 = None
+        # recent frame times, for a live rate rather than the average so far
+        self._frame_times = deque(maxlen=64)
         # (frame_idx, detection) for the control loop
         self._latest = (-1, None)
 
@@ -288,7 +291,10 @@ class ColorCircleRecorder:
         Pin exposure and gain on the driver. Must run after the stream is live,
         since setting the format resets controls on many UVC drivers.
         """
-        print(apply_camera_controls(camera_index, self.exposure_abs, self.gain))
+        print(apply_camera_controls(
+            camera_index,
+            AUTO if self.exposure_abs is None else self.exposure_abs,
+            self.gain))
 
     def set_controls(self, exposure_abs=None, gain=None):
         """
@@ -358,7 +364,7 @@ class ColorCircleRecorder:
             self._preview = _MJPEGPreview(
                 port=self.preview_port, max_width=self.preview_width,
                 fps=self.preview_fps, quality=self.preview_quality,
-                on_control=self.set_controls,
+                on_control=self.set_controls, on_stats=self.stats_line,
                 exposure_abs=self.exposure_abs, gain=self.gain)
             self._preview.start()
             print(f"live preview: http://<co-computer-ip>:{self.preview_port}/  "
@@ -408,6 +414,7 @@ class ColorCircleRecorder:
                  det['n_inliers'],
                  f"{x:.6f}", f"{y:.6f}", f"{z:.6f}", f"{det['range_m']:.6f}"])
 
+        self._frame_times.append(now)
         if self._preview is not None:
             self._preview.update(frame)
         self._latest = (self.frame_idx, det)
@@ -415,6 +422,31 @@ class ColorCircleRecorder:
         self.frame_idx += 1
 
         return det
+
+    def fps_now(self):
+        """
+        Frames per second over the last few dozen frames, 0 before there are two
+        """
+        t = self._frame_times
+        if len(t) < 2 or t[-1] <= t[0]:
+            return 0
+
+        rate = (len(t) - 1)/(t[-1] - t[0])
+
+        return rate
+
+    def stats_line(self):
+        """
+        One line of live status for the preview page, detection included since
+        that is what the sliders are being tuned against
+        """
+        dropped = self._grabber.dropped if self._grabber is not None else 0
+        _, det = self._latest
+        seen = (f"ring {det['coverage']:.0f} deg at {det['range_m']:.2f} m"
+                if det else "no ring")
+
+        return (f"{self.fps_now():.1f} fps   frame {self.frame_idx}   "
+                f"dropped {dropped}   {seen}")
 
     def latest_detection(self):
         """
