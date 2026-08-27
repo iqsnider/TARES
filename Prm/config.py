@@ -42,7 +42,7 @@ MASS_PAYLOAD = _mass_payload_by_airframe[AIRFRAME]
 DISC_DIAMETER = 0.3  # [m]
 DISC_WIDTH = 0.0025  # [m]
 _tether_len_by_airframe = {"AURELIA_X4": 10.2, "IF1200": 8.1,
-                           "EKF_TEST": 6}  # [m]
+                           "EKF_TEST": 5.8}  # [m]
 TETHER_LEN = _tether_len_by_airframe[AIRFRAME]
 
 # [m] tether pivot offset from drone CG in body frame
