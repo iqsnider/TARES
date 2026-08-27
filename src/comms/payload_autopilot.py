@@ -33,10 +33,12 @@ class StickControl(ControlComms):
         super().__init__(m, control_frequency, logger)
 
         # initialize raw PWM (us) to hover values
-        self.roll_pwm = 1500 # roll, centers 1500
-        self.pitch_pwm = 1500 # pitch, centers 1500
-        self.throttle_pwm = 1102 # throttle, rests 1102 at the bottom TODO: figure out hover throttle
-        self.yaw_pwm = 1498 # yaw, centers 1498 (not necessary, but we'll grab it for sake of completeness)
+        self.roll_pwm = 1500  # roll, centers 1500
+        self.pitch_pwm = 1500  # pitch, centers 1500
+        # throttle, rests 1102 at the bottom TODO: figure out hover throttle
+        self.throttle_pwm = 1102
+        # yaw, centers 1498 (not necessary, but we'll grab it for sake of completeness)
+        self.yaw_pwm = 1498
         # self.mode_pwm = 1102 # mode: 1102 LOITER, 1500 GUIDED, 1897 STABILIZE (may not be necessary, because mode information is more generally grabbed from the HEARTBEAT)
 
         # initialize data collection
@@ -61,8 +63,6 @@ class StickControl(ControlComms):
 
         # making time monotonic
         self.t0 = time.time()
-
-
 
     def run_payload_stick_control(self, payload_controller=dynamics.OuterLoopPayloadLQR()):
         """
@@ -98,10 +98,8 @@ class StickControl(ControlComms):
         self.ref_acceleration = np.zeros(3)
         self.thr_armed = False
 
-
         # intialize time for control loop
         next_t = time.time()
-
 
         # run payload stick control when mode is set to GUIDED
         while self.mode == "GUIDED":
@@ -128,21 +126,22 @@ class StickControl(ControlComms):
                                  c['roll'], c['pitch'], c['yaw'])
 
             # generate the payload reference from the stick inputs
-            p_ref, v_ref, a_ref = self.stick_to_payload_ref(dt=dt_ekf, yaw=c["yaw"])
+            p_ref, v_ref, a_ref = self.stick_to_payload_ref(
+                dt=dt_ekf, yaw=c["yaw"])
             x_ref = dynamics.tether_equilibrium_state(p_ref, v_ref, L)
 
             # assemble the measured 16-state and compute the control input
             x16 = est.payload_state_16(x, xi)
-            u = payload_controller.compute_u(x16 - x_ref)
+            a_des = payload_controller.compute_u(x16 - x_ref)
 
             # send off the bitmask to the FC
-            mask = self.send_accel(self.enu_ned(u), yaw=yaw_ref)
+            mask = self.send_accel(self.enu_ned(a_des), yaw=yaw_ref)
 
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
 
             # log values
-            self.logger.log(t, x, u=u,
+            self.logger.log(t, x, u=a_des,
                             yaw_ref=yaw_ref,
                             payload_p_ref=p_ref,
                             payload_v_ref=v_ref,
@@ -156,7 +155,6 @@ class StickControl(ControlComms):
             # time step
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
-
 
     def monitor_mode(self,
                      payload_controller=None,
@@ -176,7 +174,8 @@ class StickControl(ControlComms):
                 self.mode = c["echoed_mode"]
 
                 if self.mode == payload_control_mode:
-                    print(f"{payload_control_mode} mode detected, switching to payload stick control...")
+                    print(
+                        f"{payload_control_mode} mode detected, switching to payload stick control...")
                     self.run_payload_stick_control(payload_controller)
 
                 # log while idle too, so time outside the control loop is
@@ -197,7 +196,8 @@ class StickControl(ControlComms):
         if not np.isfinite(d) or abs(d) <= config.STICK_DZ:
             return 0
 
-        d = np.sign(d)*(abs(d) - config.STICK_DZ) / (config.STICK_TRAVEL - config.STICK_DZ)
+        d = np.sign(d)*(abs(d) - config.STICK_DZ) / \
+            (config.STICK_TRAVEL - config.STICK_DZ)
 
         normalized_pwm = float(np.clip(d, -1, 1))
 
@@ -223,39 +223,38 @@ class StickControl(ControlComms):
 
         # referenced to drone direction
         if yaw is not None:
-            v_cmd[0] = config.PAYLOAD_V_XY_MAX*(sp*np.sin(yaw) + sr*np.cos(yaw))
-            v_cmd[1] = config.PAYLOAD_V_XY_MAX*(sp*np.cos(yaw) - sr*np.sin(yaw))
+            v_cmd[0] = config.PAYLOAD_V_XY_MAX * \
+                (sp*np.sin(yaw) + sr*np.cos(yaw))
+            v_cmd[1] = config.PAYLOAD_V_XY_MAX * \
+                (sp*np.cos(yaw) - sr*np.sin(yaw))
 
         # ENU reference
         else:
             v_cmd[0] = config.PAYLOAD_V_XY_MAX*sr
             v_cmd[1] = config.PAYLOAD_V_XY_MAX*sp
 
-
         if self.thr_armed:
             v_cmd[2] = config.PAYLOAD_V_Z_MAX*st
         else:
             v_cmd[2] = 0
 
-        # simple ramp
-        self.ref_acceleration = (v_cmd - self.ref_velocity)/config.STICK_TAU
+        a_max = config.MAX_STICK_ACCELERATION
+        self.ref_acceleration = np.clip(
+            (v_cmd - self.ref_velocity)/dt, -a_max, a_max)
         self.ref_velocity += self.ref_acceleration*dt
         self.ref_position += self.ref_velocity*dt
 
         return self.ref_position, self.ref_velocity, self.ref_acceleration
-
-
 
     def _get_stick_signals(self):
         """
         Gets the stick PWM signal and sets the corresponding class attributes
         """
         rc = self.logger.cache["rc"]
-        self.roll_pwm = rc[0] # ch1
-        self.pitch_pwm = rc[1] # ch2
-        self.throttle_pwm = rc[2] # ch3
-        self.yaw_pwm = rc[3] # ch4
-
+        self.roll_pwm = rc[0]  # ch1
+        self.pitch_pwm = rc[1]  # ch2
+        self.throttle_pwm = rc[2]  # ch3
+        self.yaw_pwm = rc[3]  # ch4
 
     def _close_link(self):
         """

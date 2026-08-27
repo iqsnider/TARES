@@ -11,11 +11,14 @@ from payload_tracking.color_track import ColorCircleRecorder
 def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
                  capture_fps=48, frame_stride=1, camera_index=0,
                  ready_timeout=5, preview_port=None,
-                 exposure_abs=5, gain=40):
+                 exposure_abs=5, gain=40,
+                 width=2304, height=1536):
     os.makedirs(os.path.dirname(video_out) or ".", exist_ok=True)
 
     recorder = MarkerPoseRecorder(
         marker_size_m=marker_size_m,
+        width=width,
+        height=height,
         video_out=video_out,
         csv_out=csv_out,
         capture_fps=capture_fps,     # MJPG at 2304x1536 offers 48 and nothing else
@@ -52,9 +55,11 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
 def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
                        hue, hue_width, sat_min, val_min,
                        min_area_px=150, min_coverage_deg=200,
+                       expected_range_m=None,
                        capture_fps=48, frame_stride=1, camera_index=0,
                        ready_timeout=5, preview_port=None,
-                       exposure_abs=2, gain=1):
+                       exposure_abs=2, gain=1,
+                       width=2304, height=1536):
     """
     Same as start_camera, tracking a colored ring instead of markers.
 
@@ -66,12 +71,15 @@ def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
     recorder = ColorCircleRecorder(
         circle_diameter_m=circle_diameter_m,
         band_m=band_m,
+        width=width,
+        height=height,
         hue=hue,
         hue_width=hue_width,
         sat_min=sat_min,
         val_min=val_min,
         min_area_px=min_area_px,
         min_coverage_deg=min_coverage_deg,
+        expected_range_m=expected_range_m,
         video_out=video_out,
         csv_out=csv_out,
         capture_fps=capture_fps,
@@ -120,12 +128,15 @@ def start_payload_camera(video_out, csv_out, preview_port=None,
             val_min=config.CIRCLE_VAL_MIN,
             min_area_px=config.CIRCLE_MIN_AREA_PX,
             min_coverage_deg=config.CIRCLE_MIN_COVERAGE_DEG,
+            expected_range_m=config.TETHER_LEN,
             capture_fps=config.CAM_FPS,
             frame_stride=config.CAM_STRIDE,
             camera_index=camera_index,
             preview_port=preview_port,
             gain=config.CAM_GAIN,
-            exposure_abs=config.CAM_EXP_ABS)
+            exposure_abs=config.CAM_EXP_ABS,
+            width=config.CAM_WIDTH,
+            height=config.CAM_HEIGHT)
 
     marker_ids = [config.LEFT_MARKER_ID, config.CENTER_MARKER_ID,
                   config.RIGHT_MARKER_ID]
@@ -140,4 +151,6 @@ def start_payload_camera(video_out, csv_out, preview_port=None,
         frame_stride=config.CAM_STRIDE,
         camera_index=camera_index,
         gain=config.CAM_GAIN,
-        exposure_abs=config.CAM_EXP_ABS)
+        exposure_abs=config.CAM_EXP_ABS,
+        width=config.CAM_WIDTH,
+        height=config.CAM_HEIGHT)

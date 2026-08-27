@@ -277,8 +277,6 @@ class ControlComms:
                'last_report': 0,
                'n_lp': 0}
 
-        last_seq = -1
-
         # the loop time the filter last integrated to; None until the first
         # pass, which has no elapsed time to measure and uses the nominal one
         t_prev = None
@@ -286,6 +284,22 @@ class ControlComms:
         # set when the pilot takes the aircraft back, so the caller knows the
         # vehicle is no longer ours to command on the way out
         self.pilot_override = False
+
+        # trajectory.payload_trajectory builds the reference one tether length
+        # straight below the drone, which is only where the payload is when it
+        # hangs still. Start from where the swing estimate actually puts it,
+        # so the first tick does not command a step the width of the swing.
+        # The whole track shifts with it, which is what a relative end wants
+        self.logger.pump(self.m)
+        c = self.logger.cache
+        x = self.get_state_enu(c['ned'], prev=x)
+        last_seq, meas = est.latest_measurement(recorder, ekf.source)
+        xi, _ = est.step_ekf(ekf, meas, est.accel_enu(c), dt,
+                             c['roll'], c['pitch'], c['yaw'])
+        payload_now = x[0:3] + L*np.array([xi[0], xi[1], -1])
+        ref_offset = payload_now - ref(0)[0]
+        print(f"payload starts {np.linalg.norm(ref_offset[0:2]):.2f} m off the "
+              f"plumb point, shifting the reference to meet it")
 
         # intialize time for control loop
         t0 = time.time()
@@ -326,8 +340,10 @@ class ControlComms:
             xi, P = est.step_ekf(ekf, meas, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
-            # payload reference, lifted to the drone equilibrium
+            # payload reference, started at the payload and lifted to the
+            # drone equilibrium
             p_ref, v_ref = ref(t)
+            p_ref = p_ref + ref_offset
             x_ref = dynamics.tether_equilibrium_state(p_ref, v_ref, L)
 
             # assemble the measured 16-state and compute the control input

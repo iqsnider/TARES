@@ -30,6 +30,8 @@ class ColorCircleRecorder:
                  val_min=50,
                  min_area_px=150,
                  min_coverage_deg=200,         # how far the arc must wrap
+                 expected_range_m=None,        # the tether length, if known
+                 range_tol=0.35,               # how far the ring may be off it
                  fit_tol_px=3,                 # inlier band for the fit
                  min_arc_pts=20,               # shortest contour worth fitting
                  max_fit_points=4000,
@@ -57,6 +59,8 @@ class ColorCircleRecorder:
         self.val_min = int(val_min)
         self.min_area_px = min_area_px
         self.min_coverage_deg = min_coverage_deg
+        self.expected_range_m = expected_range_m
+        self.range_tol = range_tol
         self.fit_tol_px = fit_tol_px
         self.min_arc_pts = int(min_arc_pts)
         self.max_fit_points = int(max_fit_points)
@@ -213,27 +217,58 @@ class ColorCircleRecorder:
             if not r_min <= r <= r_max:
                 continue
             inl = self._inliers(pts, cx, cy, r)
+            if inl.sum() < 8:
+                continue
+
+            # refine before judging it. A seed arc sits on one edge of the
+            # band, so its radius is not the one to test against the tether,
+            # and a decoy of the wrong size would otherwise win on inlier
+            # count and only then be thrown out, taking the ring with it
+            cx, cy, r = self._refit(pts[inl])
+            if not r_min <= r <= r_max or not self._radius_expected(r):
+                continue
+
+            inl = self._inliers(pts, cx, cy, r)
             k = int(inl.sum())
             if best is None or k > best[0]:
-                best = (k, inl)
+                best = (k, cx, cy, r, inl)
 
-        if best is None or best[0] < 8:
+        if best is None:
             return None
 
-        # refit on everything the winning circle collected, then once more, so
-        # arcs on the far side of an occlusion pull their weight in the center
-        cx, cy, r = self._refit(pts[best[1]])
-        inl = self._inliers(pts, cx, cy, r)
-        if inl.sum() < 8:
-            return None
-
+        # once more on everything the winner collected, so arcs on the far
+        # side of an occlusion pull their weight in the center
+        _, cx, cy, r, inl = best
         cx, cy, r = self._refit(pts[inl])
-        if not r_min <= r <= r_max:
+        if not self._radius_expected(r):
             return None
 
-        inliers = pts[inl]
+        inliers = pts[self._inliers(pts, cx, cy, r)]
 
         return cx, cy, r, inliers
+
+    def _radius_expected(self, r):
+        """
+        Whether a fitted radius matches the tether length, if one is known.
+
+        The payload hangs one tether length from the camera whatever the drone
+        is doing, and a swing only shortens that by cos(alpha), so the ring's
+        size on the sensor is known before looking at the picture. Only the
+        refitted radius is tested: a seed arc sits on one edge of the band,
+        which at a short range is nowhere near the centerline the fit lands on.
+        """
+        if not self.expected_range_m:
+            return True
+
+        # the fit lands between the band's centerline and its outer edge, and
+        # nearer the outer one, since a longer perimeter contributes more
+        # boundary points. Both ends of that span have to be allowed, which
+        # matters most on a wide band where they are far apart
+        scale = self.focal_px/(2*self.expected_range_m)
+        lo = scale*(self.circle_diameter_m - self.band_m)*(1 - self.range_tol)
+        hi = scale*self.circle_diameter_m*(1 + self.range_tol)
+
+        return lo <= r <= hi
 
     def detect(self, frame):
         """

@@ -57,12 +57,16 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 ##### camera tracking parameters #####
 
 # settings
-CAM_GAIN = 1
-_cam_exp_abs_by_airframe = {"AURELIA_X4": 2, "IF1200": 2, "EKF_TEST": 2}
+CAM_GAIN = 10
+_cam_exp_abs_by_airframe = {"AURELIA_X4": 2, "IF1200": 2, "EKF_TEST": 150}
 CAM_EXP_ABS = _cam_exp_abs_by_airframe[AIRFRAME]
-CAM_PREVIEW_PORT = None  # None  # 8080
+CAM_PREVIEW_PORT = 8080  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1
+# must be a size the driver actually lists, since v4l2 snaps a bad one
+# silently and the recorder then asserts on what it negotiated
+CAM_WIDTH = 2304
+CAM_HEIGHT = 1536
 
 
 # camera offsets, referenced to the front of the drone and CoG [m]
@@ -269,9 +273,8 @@ _stick_travel_by_airframe = {"AURELIA_X4": 397, "IF1200": 495,
 STICK_TRAVEL = _stick_travel_by_airframe[AIRFRAME]
 _stick_dz_by_airframe = {"AURELIA_X4": 15, "IF1200": 15, "EKF_TEST": 15}
 STICK_DZ = _stick_dz_by_airframe[AIRFRAME]
-# maximum acceleration is V_MAX / STICK_TAU
-_stick_tau_by_airframe = {"AURELIA_X4": 2, "IF1200": 2, "EKF_TEST": 2}
-STICK_TAU = _stick_tau_by_airframe[AIRFRAME]
+_a_max_by_airframe = {"AURELIA_X4": 2, "IF1200": 2, "EKF_TEST": 2}
+MAX_STICK_ACCELERATION = _a_max_by_airframe[AIRFRAME]
 _payload_v_xy_max_by_airframe = {"AURELIA_X4": 1.5, "IF1200": 1.5,
                                  "EKF_TEST": 1.5}  # m/s
 _payload_v_z_max_by_airframe = {"AURELIA_X4": 0.5, "IF1200": 0.5,

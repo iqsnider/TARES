@@ -112,54 +112,67 @@ class EKF:
                           sigma_rate_0**2,
                           sigma_psi_p_0**2])
 
-    def transition(self, dt):
+    def process_model(self, xi, a_I):
         """
-        Exact discrete transition over one step.
-
-        Underdamped harmonic oscillator, alpha_ddot + 2*zeta*w*alpha_dot +
-        w^2*alpha = -a_I/L. Closed form rather than an Euler step: forward
-        Euler on an oscillator gains sqrt(1 + (w*dt)^2) in amplitude every
-        step, which at a short tether is a visible climb across a camera gap.
+        5 state process model for the EKF
         """
-        w = math.sqrt(self.g/self.L)
+        g = self.g
+        L = self.L
         z = self.zeta
-        wd = w*math.sqrt(1 - z**2)
-        e = math.exp(-z*w*dt)
-        c, s = math.cos(wd*dt), math.sin(wd*dt)
+        w = math.sqrt(g/L)
+        alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, _ = xi
 
-        Phi = np.eye(STATE_DIM)
-        for a, a_dot in ((IX_ALPHA_X, IX_ALPHA_DOT_X),
-                         (IX_ALPHA_Y, IX_ALPHA_DOT_Y)):
-            Phi[a, a] = e*(c + z*w*s/wd)
-            Phi[a, a_dot] = e*s/wd
-            Phi[a_dot, a] = -e*w**2*s/wd
-            Phi[a_dot, a_dot] = e*(c - z*w*s/wd)
+        xi_dot_I = np.array([alpha_dot_x,
+                             alpha_dot_y,
+                             -(a_I[0] + alpha_x*g)/L - 2*z*w*alpha_dot_x,
+                             -(a_I[1] + alpha_y*g)/L - 2*z*w*alpha_dot_y,
+                             0])
 
-        return Phi
+        return xi_dot_I
 
-    def equilibrium(self, a_I):
+    def F_jacobian(self):
         """
-        The swing angles the tether hangs at under a constant drone acceleration
+        Jacobian of the process model
         """
-        eq = np.zeros(STATE_DIM)
-        eq[IX_ALPHA_X] = -a_I[0]/self.g
-        eq[IX_ALPHA_Y] = -a_I[1]/self.g
+        g = self.g
+        L = self.L
+        w = math.sqrt(g/L)
 
-        return eq
+        F = np.zeros((STATE_DIM, STATE_DIM))
+        F[IX_ALPHA_X, IX_ALPHA_DOT_X] = 1
+        F[IX_ALPHA_Y, IX_ALPHA_DOT_Y] = 1
+        F[IX_ALPHA_DOT_X, IX_ALPHA_X] = -g/L
+        F[IX_ALPHA_DOT_Y, IX_ALPHA_Y] = -g/L
+        F[IX_ALPHA_DOT_X, IX_ALPHA_DOT_X] = -2*self.zeta*w
+        F[IX_ALPHA_DOT_Y, IX_ALPHA_DOT_Y] = -2*self.zeta*w
+
+        return F
+
+    def euler_integration(self, xi, a_I, dt):
+        """
+        Euler integration
+        """
+        return xi + dt*self.process_model(xi, a_I)
 
     def ekf_predict(self, xi, P, a_I, dt):
         """
-        Propagate state and covariance one step
+        Propagate state and covariance one step.
+
+        Forward Euler on an oscillator gains sqrt(1 + (w*dt)^2) in amplitude
+        every step, so a long stretch with no camera climbs on its own: about
+        2.7x over 5 s at L = 0.5 m and 50 Hz, and 6% at L = 8.1 m. Damping
+        offsets some of it, and a measurement resets it.
         """
         xi = np.asarray(xi, dtype=float)
         P = np.asarray(P, dtype=float)
 
-        Phi = self.transition(dt)
+        xi_pred = self.euler_integration(xi, a_I, dt)
 
-        # a_I is held constant across the step, so it only leans the point the
-        # swing oscillates about; psi_p rides through on Phi's identity row
-        eq = self.equilibrium(a_I)
-        xi_pred = eq + Phi @ (xi - eq)
+        # process jacobian
+        F = self.F_jacobian()
+
+        # discrete time process jacobian
+        Phi = np.eye(STATE_DIM) + F*dt
 
         Q = np.diag([0, 0, self.q_xy, self.q_xy, self.q_yaw])*dt
         P_pred = Phi @ P @ Phi.T + Q
