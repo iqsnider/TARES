@@ -108,8 +108,7 @@ def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
     return recorder, thread
 
 
-def start_payload_camera(video_out, csv_out, preview_port=None,
-                         camera_index=0):
+def start_payload_camera(video_out, csv_out, camera_index=0):
     """
     Whichever tracker config.EKF_SOURCE selects, wired from config.
 
@@ -132,7 +131,7 @@ def start_payload_camera(video_out, csv_out, preview_port=None,
             capture_fps=config.CAM_FPS,
             frame_stride=config.CAM_STRIDE,
             camera_index=camera_index,
-            preview_port=preview_port,
+            preview_port=config.CAM_PREVIEW_PORT,
             gain=config.CAM_GAIN,
             exposure_abs=config.CAM_EXP_ABS,
             width=config.CAM_WIDTH,
@@ -146,7 +145,7 @@ def start_payload_camera(video_out, csv_out, preview_port=None,
         video_out=video_out,
         csv_out=csv_out,
         marker_ids=marker_ids,
-        preview_port=preview_port,
+        preview_port=config.CAM_PREVIEW_PORT,
         capture_fps=config.CAM_FPS,
         frame_stride=config.CAM_STRIDE,
         camera_index=camera_index,

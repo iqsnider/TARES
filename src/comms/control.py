@@ -187,9 +187,15 @@ class ControlComms:
             self.set_rate("RAW_IMU", 50)
             state['last_reassert'] = t
 
-    def fly_drone_trajectory(self, ref, controller, duration, yaw_lock=True, yaw_ref=None, reassert=False):
+    def fly_drone_trajectory(self, ref, controller, duration, yaw_lock=True,
+                             yaw_ref=None, reassert=False, recorder=None,
+                             ekf=None):
         """
         Trajectory following control loop for only the drone
+
+        Pass `recorder` and `ekf` to run the payload filter alongside, which
+        logs the swing the drone controller is not closing around. Watching
+        only, so the estimate never reaches the control input.
         """
 
         # compute time step
@@ -208,6 +214,12 @@ class ControlComms:
                'last_lp': self.logger.cache['fc_time_boot_ms'],
                'last_report': 0,
                'n_lp': 0}
+
+        # the loop time the filter last integrated to; None until the first
+        # pass, which has no elapsed time to measure and uses the nominal one
+        watching = ekf is not None and recorder is not None
+        t_prev = None
+        last_seq = -1
 
         # intialize time for control loop
         t0 = time.time()
@@ -241,11 +253,38 @@ class ControlComms:
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
 
+            payload = {}
+            if watching:
+                c = self.logger.cache
+
+                # fold in the camera only when the frame is new
+                seq, meas = est.latest_measurement(recorder, ekf.source)
+                if seq == last_seq:
+                    meas = None
+                else:
+                    last_seq = seq
+
+                dt_ekf = dt if t_prev is None else t - t_prev
+                t_prev = t
+
+                xi, P = est.step_ekf(ekf, meas, est.accel_enu(c), dt_ekf,
+                                     c['roll'], c['pitch'], c['yaw'])
+
+                payload = dict(payload_alpha=(xi[0], xi[1]),
+                               payload_alphadot=(xi[2], xi[3]),
+                               payload_psi_p=xi[ekfm.IX_PSI_P],
+                               payload_innov=ekf.innov,
+                               payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                            P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                            P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                            P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
+
             # log sent values, on the flight-wide clock rather than this leg's
             if yaw_ref is not None:
-                self.logger.log(t + leg_offset, x, p_ref, v_ref, u, yaw_ref=yaw_ref)
+                self.logger.log(t + leg_offset, x, p_ref, v_ref, u,
+                                yaw_ref=yaw_ref, **payload)
             else:
-                self.logger.log(t + leg_offset, x, p_ref, v_ref, u)
+                self.logger.log(t + leg_offset, x, p_ref, v_ref, u, **payload)
 
             # time step
             next_t += dt

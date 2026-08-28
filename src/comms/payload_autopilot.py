@@ -51,8 +51,7 @@ class StickControl(ControlComms):
         # initialize payload tracking, markers or a color ring per EKF_SOURCE
         self.recorder, self.cam_thread = cam.start_payload_camera(
             video_out=self.video_out,
-            csv_out=self.poses_out,
-            preview_port=config.CAM_PREVIEW_PORT)
+            csv_out=self.poses_out)
 
         # initialize payload state estimator
         self.ekf = est.start_ekf(self.logger, recorder=self.recorder)
@@ -65,7 +64,8 @@ class StickControl(ControlComms):
         # making time monotonic
         self.t0 = time.time()
 
-    def run_payload_stick_control(self, payload_controller=dynamics.OuterLoopPayloadLQR()):
+    def run_payload_stick_control(self,
+                                  payload_controller=dynamics.OuterLoopPayloadLQR()):
         """
         Initializes the payload control system and loops the stick listener
         Locks drone yaw.
@@ -123,7 +123,7 @@ class StickControl(ControlComms):
             t_prev = t
 
             # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
-            xi, _ = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt_ekf,
+            xi, P = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt_ekf,
                                  c['roll'], c['pitch'], c['yaw'])
 
             # generate the payload reference from the stick inputs
@@ -148,7 +148,8 @@ class StickControl(ControlComms):
                             payload_v_ref=v_ref,
                             payload_alpha=(xi[0], xi[1]),
                             payload_alphadot=(xi[2], xi[3]),
-                            payload_innov=self.ekf.innov)
+                            payload_innov=self.ekf.innov,
+                            payload_cov=P)
 
             # set the mode
             self.mode = c["echoed_mode"]
@@ -177,7 +178,8 @@ class StickControl(ControlComms):
                 if self.mode == payload_control_mode:
                     print(
                         f"{payload_control_mode} mode detected, switching to payload stick control...")
-                    self.run_payload_stick_control(payload_controller)
+                    self.run_payload_stick_control(
+                        payload_controller)
 
                 # log while idle too, so time outside the control loop is
                 # visible instead of collapsing into a single row
@@ -256,6 +258,100 @@ class StickControl(ControlComms):
         self.pitch_pwm = rc[1]  # ch2
         self.throttle_pwm = rc[2]  # ch3
         self.yaw_pwm = rc[3]  # ch4
+
+    def force_stick_control(self,
+                            payload_controller=dynamics.OuterLoopPayloadLQR(),
+                            blackout_time=None,
+                            blackout_duration=None):
+        """
+        FOR EXPERIMENTAL FLIGHT ONLY. DO NOT USE UNLESS YOUR NAME IS IAN SNIDER.
+        """
+        comms.set_mode(self.m, "GUIDED", logger=self.logger)
+        # compute time step
+        dt = 1/self.hz
+        L = config.TETHER_LEN
+        yaw_ref = self.logger.cache['yaw']
+
+        # make sure we have full control
+        comms.set_guid_options(self.m, 48)
+
+        # get initial state
+        self._wait_fresh_state()
+        x = self.x0
+
+        last_seq = -1
+        # the loop time the filter last integrated to; None until the first
+        # pass, which has no elapsed time to measure and uses the nominal one
+        t_prev = None
+
+        # initialize the payload reference
+        self.logger.pump(self.m)
+        c = self.logger.cache
+        x = get_state_enu(c['ned'], prev=x)
+        last_seq, meas = est.latest_measurement(self.recorder, self.ekf.source)
+        xi, _ = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt,
+                             c['roll'], c['pitch'], c['yaw'])
+        self.ref_position = x[0:3] + L*np.array([xi[0], xi[1], -1])
+        self.ref_velocity = np.zeros(3)
+        self.ref_acceleration = np.zeros(3)
+        self.thr_armed = False
+
+        # intialize time for control loop
+        next_t = time.time()
+
+        # run payload stick control when mode is set to GUIDED
+        while self.mode == "GUIDED":
+            t = time.time() - self.t0
+            self.logger.pump(self.m)
+            c = self.logger.cache
+
+            # get current drone state p,v
+            x = get_state_enu(c['ned'], prev=x)
+
+            # simulate camera blackout, very dangerous be careful
+            if blackout_time is not None and t > blackout_time and t < (blackout_time + blackout_duration):
+                seq = last_seq
+
+            else:
+                seq, meas = est.latest_measurement(
+                    self.recorder, self.ekf.source)
+                if seq == last_seq:
+                    meas = None
+                else:
+                    last_seq = seq
+
+            # ekf dt
+            dt_ekf = dt if t_prev is None else t - t_prev
+            t_prev = t
+
+            # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
+            xi, P = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt_ekf,
+                                 c['roll'], c['pitch'], c['yaw'])
+
+            # generate the payload reference from the stick inputs
+            p_ref, v_ref, a_ref = self.stick_to_payload_ref(
+                dt=dt_ekf, yaw=c["yaw"])
+            x_ref = dynamics.tether_equilibrium_state(p_ref, v_ref, L)
+
+            # assemble the measured 16-state and compute the control input
+            x16 = est.payload_state_16(x, xi)
+            a_des = payload_controller.compute_u(x16 - x_ref)
+
+            # send off the bitmask to the FC
+            mask = self.send_accel(tf.T_ENU_from_NED() @ a_des, yaw=yaw_ref)
+
+            # confirm the bitmask with the FC
+            self.logger.note_sent(bitmask=mask)
+
+            # log values
+            self.logger.log(t, x, u=a_des,
+                            yaw_ref=yaw_ref,
+                            payload_p_ref=p_ref,
+                            payload_v_ref=v_ref,
+                            payload_alpha=(xi[0], xi[1]),
+                            payload_alphadot=(xi[2], xi[3]),
+                            payload_innov=self.ekf.innov,
+                            payload_cov=P)
 
     def _close_link(self):
         """

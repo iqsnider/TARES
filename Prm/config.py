@@ -151,6 +151,30 @@ LQR_DRONE_Q_VEL_XY = _lqr_drone_q_vel_xy_by_airframe[AIRFRAME]
 LQR_DRONE_Q_VEL_Z = _lqr_drone_q_vel_z_by_airframe[AIRFRAME]
 LQR_DRONE_R_ACC = _lqr_drone_r_acc_by_airframe[AIRFRAME]
 
+# drone outer loop with integral action (OuterLoopLQI)
+_lqi_drone_q_pos_xy_by_airframe = {"AURELIA_X4": 1, "IF1200": 1, "EKF_TEST": 1}
+_lqi_drone_q_pos_z_by_airframe = {"AURELIA_X4": 1, "IF1200": 1, "EKF_TEST": 1}
+_lqi_drone_q_vel_xy_by_airframe = {"AURELIA_X4": 1, "IF1200": 1, "EKF_TEST": 1}
+_lqi_drone_q_vel_z_by_airframe = {"AURELIA_X4": 1, "IF1200": 1, "EKF_TEST": 1}
+_lqi_drone_q_int_xy_by_airframe = {"AURELIA_X4": (1/8)**2, "IF1200": (1/8)**2,
+                                   "EKF_TEST": (1/8)**2}
+_lqi_drone_q_int_z_by_airframe = {"AURELIA_X4": (1/8)**2, "IF1200": (1/8)**2,
+                                  "EKF_TEST": (1/8)**2}
+_lqi_drone_r_acc_by_airframe = {"AURELIA_X4": 1, "IF1200": 1, "EKF_TEST": 1}
+LQI_DRONE_Q_POS_XY = _lqi_drone_q_pos_xy_by_airframe[AIRFRAME]
+LQI_DRONE_Q_POS_Z = _lqi_drone_q_pos_z_by_airframe[AIRFRAME]
+LQI_DRONE_Q_VEL_XY = _lqi_drone_q_vel_xy_by_airframe[AIRFRAME]
+LQI_DRONE_Q_VEL_Z = _lqi_drone_q_vel_z_by_airframe[AIRFRAME]
+LQI_DRONE_Q_INT_XY = _lqi_drone_q_int_xy_by_airframe[AIRFRAME]
+LQI_DRONE_Q_INT_Z = _lqi_drone_q_int_z_by_airframe[AIRFRAME]
+LQI_DRONE_R_ACC = _lqi_drone_r_acc_by_airframe[AIRFRAME]
+# error norm [m] below which the integrator is allowed to accumulate
+_lqi_drone_e_band_by_airframe = {"AURELIA_X4": 5, "IF1200": 5, "EKF_TEST": 5}
+LQI_DRONE_E_BAND = _lqi_drone_e_band_by_airframe[AIRFRAME]
+# cap on the integral term's own contribution to u [m/s^2]
+_lqi_drone_u_i_max_by_airframe = {"AURELIA_X4": 1.5, "IF1200": 2, "EKF_TEST": 2}
+LQI_DRONE_U_I_MAX = _lqi_drone_u_i_max_by_airframe[AIRFRAME]
+
 # payload outer loop (OuterLoopPayloadLQR)
 _lqr_payload_w_pos_xy_by_airframe = {
     "AURELIA_X4": (1/1)**2, "IF1200": (1/1.2)**2, "EKF_TEST": (1/1.2)**2}

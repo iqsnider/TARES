@@ -750,6 +750,25 @@ def drone_states(fl, records):
             cols("drone_vx_meas", "drone_vy_meas", "drone_vz_meas"))
 
 
+def body_rates(fl, records):
+    """
+    Body angular rate at each record's flight time, ENU ordered, Nx3 [rad/s].
+
+    RAW_IMU logs the gyro in mrad/s about FRD, so it is scaled and swapped
+    into the same body ENU the overlay's T_IB is built on.
+    """
+    t = fl.cur_time.to_numpy()
+    at = [r["t_flight"] for r in records]
+
+    w_frd = np.column_stack([np.interp(at, t, fl[c].to_numpy(float))/1000
+                             for c in ("drone_gyrox_meas", "drone_gyroy_meas",
+                                       "drone_gyroz_meas")])
+
+    w_B = w_frd @ tf.T_ENU_from_NED().T
+
+    return w_B
+
+
 def payload_enu(r, p_drone, filt):
     """Where the filter puts the payload: a tether below the drone, leaned
     over by the swing angles. The small-angle model the controller flew on."""
@@ -757,18 +776,26 @@ def payload_enu(r, p_drone, filt):
                                       r["xi"][ekfm.IX_ALPHA_Y], -1])
 
 
-def velocity_tip_px(r, p_drone, filt, K, D, lead_s=LEAD_S):
+def velocity_tip_px(r, p_drone, w_B, filt, K, D, lead_s=LEAD_S):
     """Where the payload is headed, in pixels: the tip of the velocity arrow.
 
-    The velocity is the payload's in the camera frame, which is the motion the
-    picture actually shows: the camera travels with the drone, so the drone's
-    own velocity drops out and only the swing is left,
+    The payload's velocity in the camera frame, which is the motion the
+    picture actually shows. The camera rides the drone, so the drone's own
+    travel drops out and the swing is left,
 
         v_rel_I = L*[alphadot_x, alphadot_y, 0]
 
-    A payload flying level with the drone at 1 m/s sits still in frame and
-    carries no arrow. The ENU velocity the controller is judged on is the
-    payload velocity plot instead.
+    but the camera also turns with the drone, and a turning camera sweeps the
+    payload across the frame with no swing at all. That is the transport term,
+    taken off in the body frame where the rate is measured,
+
+        v_seen = v_rel - w x d,   d = drone to payload
+
+    On a long tether it is the larger half: at 7.5 m a 0.09 rad/s body rate
+    already outruns a typical swing. A payload flying level with the drone,
+    on a drone holding its attitude, sits still in frame and carries no arrow.
+    The ENU velocity the controller is judged on is the payload velocity plot
+    instead.
 
     The tip is the payload's own position carried `lead_s` along that velocity
     and projected like any other point, so the arrow reads as a length rather
@@ -777,11 +804,18 @@ def velocity_tip_px(r, p_drone, filt, K, D, lead_s=LEAD_S):
     prediction -- the tether is a 6.3 s pendulum, so a second of swing turns
     through a sixth of a cycle and the payload never reaches the tip.
     """
+    T_IB = r["T_IB"]
     v_rel_I = filt.L*np.array([r["xi"][ekfm.IX_ALPHA_DOT_X],
                                r["xi"][ekfm.IX_ALPHA_DOT_Y], 0])
-    ahead = payload_enu(r, p_drone, filt) + lead_s*v_rel_I
 
-    tip = project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
+    # drone to payload, carried into the body frame the gyro measures in
+    d_I = filt.L*np.array([r["xi"][ekfm.IX_ALPHA_X],
+                           r["xi"][ekfm.IX_ALPHA_Y], -1])
+    v_rot_I = T_IB @ np.cross(w_B, T_IB.T @ d_I)
+
+    ahead = payload_enu(r, p_drone, filt) + lead_s*(v_rel_I - v_rot_I)
+
+    tip = project_enu(ahead, p_drone, T_IB, filt, K, D)[0]
 
     return tip
 
@@ -900,6 +934,7 @@ def overlay_video(session, records, save=None):
                     source=ekfm.SOURCE_ARUCO,
                     L=session.config.get("TETHER_LEN"))
     p_drone, _ = drone_states(session.fl, records)
+    w_B = body_rates(session.fl, records)
     meas_by_frame = {r["frame"]: r["n"] for r in records}
     drawn = {}
     for k, r in enumerate(records):
@@ -909,7 +944,7 @@ def overlay_video(session, records, save=None):
         # a payload swung out of the camera's half-space projects nowhere
         if np.isfinite(center).all():
             drawn[r["frame"]] = (center,
-                                 velocity_tip_px(r, p_drone[k], filt, K, D),
+                                 velocity_tip_px(r, p_drone[k], w_B[k], filt, K, D),
                                  plumb_px(p_drone[k], r["T_IB"], filt, K, D))
     ref = reference_pixels(session, records, filt, K, D,
                            truncate="stick" in session.label.lower())
@@ -1020,13 +1055,14 @@ def overlay_compare_video(session, records_reg, records_post, save=None):
 
     def project(records):
         p_drone, _ = drone_states(session.fl, records)
+        w_B = body_rates(session.fl, records)
         drawn = {}
         for k, r in enumerate(records):
             P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM))
             center, _, _ = filt.estimate_to_px_coords(r["xi"], P, r["T_IB"], K, D)
             if np.isfinite(center).all():
                 drawn[r["frame"]] = (center,
-                                     velocity_tip_px(r, p_drone[k], filt, K, D),
+                                     velocity_tip_px(r, p_drone[k], w_B[k], filt, K, D),
                                      plumb_px(p_drone[k], r["T_IB"], filt, K, D))
         return drawn
 

@@ -128,7 +128,7 @@ class EKF:
 
     def euler_integration(self, xi, a_I, dt):
         """
-        Improved Euler (Heun's method) integration.
+        Improved Euler integration.
 
         a_I is held constant across the step, since only one acceleration
         sample is available per predict call.

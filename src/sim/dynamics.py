@@ -82,6 +82,88 @@ class OuterLoopLQR:
         return a_ref - self.K @ e
 
 
+class OuterLoopLQI:
+    """
+    6 state lqi for just drone, 3x6 state gain + 3x3 integral gain
+    """
+
+    def __init__(self,
+                 q_pos_xy=None, q_pos_z=None,
+                 q_vel_xy=None, q_vel_z=None,
+                 q_int_xy=None, q_int_z=None,
+                 r_acc=None, e_band=None, u_i_max=None):
+        q_pos_xy = config.LQI_DRONE_Q_POS_XY if q_pos_xy is None else q_pos_xy
+        q_pos_z = config.LQI_DRONE_Q_POS_Z if q_pos_z is None else q_pos_z
+        q_vel_xy = config.LQI_DRONE_Q_VEL_XY if q_vel_xy is None else q_vel_xy
+        q_vel_z = config.LQI_DRONE_Q_VEL_Z if q_vel_z is None else q_vel_z
+        q_int_xy = config.LQI_DRONE_Q_INT_XY if q_int_xy is None else q_int_xy
+        q_int_z = config.LQI_DRONE_Q_INT_Z if q_int_z is None else q_int_z
+        r_acc = config.LQI_DRONE_R_ACC if r_acc is None else r_acc
+        e_band = config.LQI_DRONE_E_BAND if e_band is None else e_band
+        u_i_max = config.LQI_DRONE_U_I_MAX if u_i_max is None else u_i_max
+
+        A, B = _build_double_integrator()
+
+        # the output the integrator accumulates: drone position
+        C = np.zeros((3, 6))
+        C[0, 0] = 1
+        C[1, 1] = 1
+        C[2, 2] = 1
+
+        # augment: xI_dot = C @ x
+        Abar = np.zeros((9, 9))
+        Abar[:6, :6] = A
+        Abar[6:, :6] = C
+        Bbar = np.zeros((9, 3))
+        Bbar[:6, :] = B
+
+        Q = np.zeros((9, 9))
+        Q[:6, :6] = np.diag([q_pos_xy, q_pos_xy, q_pos_z,
+                             q_vel_xy, q_vel_xy, q_vel_z])
+        Q[6:, 6:] = np.diag([q_int_xy, q_int_xy, q_int_z])
+        R = r_acc*np.eye(3)
+
+        Kbar = _lqr(Abar, Bbar, Q, R)   # (3, 9)
+        self.C = C
+        self.K = Kbar[:, :6]            # (3, 6)
+        self.Ki = Kbar[:, 6:]           # (3, 3)
+        self.xi = np.zeros(3)
+
+        # make accessible for analysis
+        self.Abar = Abar
+        self.Bbar = Bbar
+        self.Kbar = Kbar
+        self.Q = Q
+        self.R = R
+
+        self.e_band = e_band
+        self.u_i_max = u_i_max
+
+    def compute_u(self, x, p_ref, v_ref, a_ref=None):
+        dt = 1/config.CONTROL_FREQUENCY
+        p_ref = np.asarray(p_ref)
+        v_ref = np.asarray(v_ref)
+        if a_ref is None:
+            a_ref = np.zeros(3)
+
+        e = np.concatenate([x[0:3] - p_ref, x[3:6] - v_ref])
+        y_err = e[0:3]
+
+        # stop accumulating once error is too large, or once accumulating
+        # further would push the integral term's own contribution past its cap
+        if np.linalg.norm(y_err[:2]) < self.e_band:
+            xi_trial = self.xi + y_err*dt
+            if np.linalg.norm(self.Ki @ xi_trial) <= self.u_i_max:
+                self.xi = xi_trial
+
+        u = a_ref - self.K @ e - self.Ki @ self.xi
+
+        return u
+
+    def reset(self):
+        self.xi[:] = 0
+
+
 class OuterLoopPayloadLQR:
     """
     3x10 gain outputs acceleration
