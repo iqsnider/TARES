@@ -25,6 +25,7 @@ import Prm.config as config
 import sim.estimation.calculate_payload_position as payload
 import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
+import sim.transformations as tf
 from sim.plotting import TimeSlider, configure_plot_style, C_REF, C_PAYLOAD
 import catalog
 import drone_plot
@@ -37,6 +38,7 @@ CALIB_FILE = (Path(__file__).resolve().parents[1] /
               "src/payload_tracking/camera_calibration/calibration.json")
 
 BGR_EST = (60, 255, 80)
+BGR_EST_REG = (255, 255, 0)  # vivid cyan, --compare's as-flown estimate
 BGR_REF = (60, 60, 255)
 BGR_ERR = (255, 60, 0)
 BGR_AXIS = (245, 245, 245)
@@ -75,7 +77,8 @@ def direct_measurement(frames, inp, offset, geom=None):
         phi = np.interp(t, t_fl, inp["phi"])
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
-        m = pp.swing_angles(g, ekfm.T_IB_fn(phi, theta, psi), geom=geom)
+        S = tf.T_ENU_from_NED()
+        m = pp.swing_angles(g, S @ tf.T_IB(phi, theta, psi) @ S, geom=geom)
         if m is None:
             continue
         rows.append((t_cam, *m, len(det)))
@@ -90,12 +93,12 @@ def estimated_payload_enu(records, fl, L_m):
     Pass the session's own config_snapshot.json TETHER_LEN as `L_m`.
     """
     t = fl.cur_time.to_numpy()
-    tf = np.array([r["t_flight"] for r in records])
-    E = np.interp(tf, t, fl.drone_px_meas.to_numpy())
-    N = np.interp(tf, t, fl.drone_py_meas.to_numpy())
-    U = np.interp(tf, t, fl.drone_pz_meas.to_numpy())
+    t_flight = np.array([r["t_flight"] for r in records])
+    E = np.interp(t_flight, t, fl.drone_px_meas.to_numpy())
+    N = np.interp(t_flight, t, fl.drone_py_meas.to_numpy())
+    U = np.interp(t_flight, t, fl.drone_pz_meas.to_numpy())
     q = np.array([r["q_I"] for r in records])
-    return tf, np.c_[E, N, U] + L_m * q
+    return t_flight, np.c_[E, N, U] + L_m * q
 
 
 # filter tuning a session snapshots, keyed by the EKF's own argument name
@@ -647,6 +650,7 @@ def logged_records(session):
     frames = session.poses.groupby("frame").time_s.first()
     seen = detections_by_frame(session)
     has_cov = catalog.has_logged_covariance(fl)
+    S = tf.T_ENU_from_NED()
 
     t_cam = frames.to_numpy(float)
     t_flight = t_cam - session.pose_offset
@@ -679,8 +683,9 @@ def logged_records(session):
         sigma_ax = sigma_ay = sigma_pp = np.full(n, nan)
         P_at = lambda i: None
 
-    return [dict(frame=int(f), t_cam=tc, t_flight=tf, n=seen.get(int(f), 0),
-                 xi=xi[i], P=P_at(i), T_IB=ekfm.T_IB_fn(phi[i], theta[i], psi[i]),
+    return [dict(frame=int(f), t_cam=tc, t_flight=t_fl_i, n=seen.get(int(f), 0),
+                 xi=xi[i], P=P_at(i),
+                 T_IB=S @ tf.T_IB(phi[i], theta[i], psi[i]) @ S,
                  alpha_x=xi[i, ekfm.IX_ALPHA_X], alpha_y=xi[i, ekfm.IX_ALPHA_Y],
                  alpha_dot_x=xi[i, ekfm.IX_ALPHA_DOT_X],
                  alpha_dot_y=xi[i, ekfm.IX_ALPHA_DOT_Y],
@@ -688,8 +693,8 @@ def logged_records(session):
                  sigma_alpha_x=sigma_ax[i], sigma_alpha_y=sigma_ay[i],
                  sigma_psi_p=sigma_pp[i],
                  q_I=np.array([xi[i, ekfm.IX_ALPHA_X], xi[i, ekfm.IX_ALPHA_Y], -1]))
-            for i, (f, tc, tf) in enumerate(zip(frames.index[keep],
-                                                t_cam[keep], t_flight[keep]))]
+            for i, (f, tc, t_fl_i) in enumerate(zip(frames.index[keep],
+                                                    t_cam[keep], t_flight[keep]))]
 
 
 def project_enu(P_I, p_drone, T_IB, filt, K, D):
@@ -974,6 +979,129 @@ def overlay_video(session, records, save=None):
     cap.release()
     writer.release()
     print(f"wrote {out}  ({len(drawn)} of {i} frames carry an estimate)")
+    return out
+
+
+def overlay_compare_video(session, records_reg, records_post, save=None):
+    """Redraw the recording with both the as-flown and post-hoc estimates on it.
+
+    Same picture as `overlay_video` -- reference track, plumb bob, corner text
+    -- but the estimate dot and velocity arrow are drawn twice: vivid cyan
+    for `records_reg` (what the aircraft actually flew on, or a live run if it
+    never logged states) and green for `records_post` (the filter re-run
+    offline on the session's own config_snapshot.json). The plumb bob is drawn
+    once, from whichever of the two has an estimate that frame, since it only
+    depends on drone attitude and does not move between the two runs.
+    """
+    geom = pp.Geometry.from_snapshot(session.config)
+    mode_by_frame = _mode_by_frame(session)
+    config_lines = _config_summary_lines(session.config)
+    src = find_recording(session)
+    if src is None:
+        raise SystemExit(f"session {session.id} has no recording next to "
+                         f"{session.pose.name}")
+
+    cap = cv2.VideoCapture(str(src))
+    if not cap.isOpened():
+        raise SystemExit(f"cannot open {src}")
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    t_pose = session.poses.groupby("frame").time_s.first().to_numpy()
+    fps = (len(t_pose) - 1) / (t_pose[-1] - t_pose[0]) if len(t_pose) > 1 else 30
+
+    out = Path(save) if save else src.with_name(session.id + "_compare" + OVERLAY_SUFFIX)
+    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"),
+                             fps, (w, h))
+
+    K, D = _intrinsics()
+    filt = make_ekf(0, 0, 0, 0, 0, 0, geom=geom,
+                    source=ekfm.SOURCE_ARUCO,
+                    L=session.config.get("TETHER_LEN"))
+
+    def project(records):
+        p_drone, _ = drone_states(session.fl, records)
+        drawn = {}
+        for k, r in enumerate(records):
+            P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM))
+            center, _, _ = filt.estimate_to_px_coords(r["xi"], P, r["T_IB"], K, D)
+            if np.isfinite(center).all():
+                drawn[r["frame"]] = (center,
+                                     velocity_tip_px(r, p_drone[k], filt, K, D),
+                                     plumb_px(p_drone[k], r["T_IB"], filt, K, D))
+        return drawn
+
+    drawn_reg = project(records_reg)
+    drawn_post = project(records_post)
+    meas_by_frame = {r["frame"]: r["n"] for r in records_reg}
+    ref = reference_pixels(session, records_reg, filt, K, D,
+                           truncate="stick" in session.label.lower())
+
+    i = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        _crosshair(frame, K)
+
+        mode = mode_by_frame.get(i)
+        if mode is not None:
+            mode_color = _vivid(_hex_to_bgr(
+                drone_plot.MODE_SHADING.get(mode, ("0.7", 0))[0]))
+            _corner_text(frame, [mode], "left", color=mode_color, scale=2, thick=4)
+
+        n = meas_by_frame.get(i)
+        if n is not None:
+            _corner_text(frame, ["MEASUREMENT" if n else "NO MEASUREMENT"],
+                         "left", color=BGR_EST if n else BGR_HOLD,
+                         scale=1.4, thick=3, dy=64 if mode is not None else 0)
+        _corner_text(frame, config_lines, "right")
+        # fixed offset, clear of the mode/measurement lines above regardless
+        # of whether either was drawn this frame
+        _corner_text(frame, ["as-flown"], "left", color=BGR_EST_REG, dy=150)
+        _corner_text(frame, ["post-hoc"], "left", color=BGR_EST, dy=180)
+
+        line = ref.get(i)
+        if line is not None:
+            runs, here, _ = line
+            cv2.polylines(frame, runs, False, BGR_REF, 2, cv2.LINE_AA)
+            if np.isfinite(here).all():
+                at_ref = tuple(np.clip(here, -1e4, 1e4).round().astype(int))
+                cv2.circle(frame, at_ref, 10, BGR_REF, -1, cv2.LINE_AA)
+                cv2.circle(frame, at_ref, 10, (255, 255, 255), 2, cv2.LINE_AA)
+
+        hit_reg = drawn_reg.get(i)
+        hit_post = drawn_post.get(i)
+
+        plumb_hit = hit_reg or hit_post
+        if plumb_hit is not None:
+            _, _, plumb = plumb_hit
+            if np.isfinite(plumb).all():
+                at_plumb = tuple(np.clip(plumb, -1e4, 1e4).round().astype(int))
+                cv2.circle(frame, at_plumb, 6, BGR_PLUMB, -1, cv2.LINE_AA)
+                cv2.circle(frame, at_plumb, 6, (255, 255, 255), 2, cv2.LINE_AA)
+
+        for hit, color in ((hit_reg, BGR_EST_REG), (hit_post, BGR_EST)):
+            if hit is None:
+                continue
+            center, tip, _ = hit
+            c = tuple(np.round(center).astype(int))
+
+            if np.isfinite(tip).all():
+                cv2.arrowedLine(frame, c,
+                                tuple(np.clip(tip, -1e4, 1e4).round().astype(int)),
+                                color, 2, cv2.LINE_AA, tipLength=0.2)
+
+            cv2.circle(frame, c, 6, color, -1)
+            cv2.circle(frame, c, 6, (255, 255, 255), 2)
+
+        writer.write(frame)
+        i += 1
+
+    cap.release()
+    writer.release()
+    print(f"wrote {out}  ({len(drawn_reg)} as-flown / {len(drawn_post)} "
+          f"post-hoc frames carry an estimate)")
     return out
 
 

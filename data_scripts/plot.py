@@ -36,7 +36,7 @@ def _out(save, name):
 # ----------------------------------------------------------------------------
 # what each kind draws
 # ----------------------------------------------------------------------------
-def kind_drone(s, save, cam=False, post=False):
+def kind_drone(s, save, cam=False, post=False, compare=False):
     """Everything the flight log alone can show."""
     import drone_plot
     # only needed to draw the payload track, so a session with no onboard
@@ -46,7 +46,7 @@ def kind_drone(s, save, cam=False, post=False):
                           stem=s.id, L=L)
 
 
-def kind_traj(s, save, cam=False, post=False):
+def kind_traj(s, save, cam=False, post=False, compare=False):
     """3-D trajectory of the drone with the camera-measured payload."""
     import payload_plot
     import sim.estimation.pre_process as pp
@@ -62,7 +62,7 @@ def kind_traj(s, save, cam=False, post=False):
         s.fl, pdf, save=_out(save, f"{s.id}_trajectory_3d.png"))
 
 
-def kind_ekf(s, save, cam=False, post=False):
+def kind_ekf(s, save, cam=False, post=False, compare=False):
     """Run the payload EKF and show the 3-D and time-series comparisons.
 
     With `cam`, the recording is also written back out as an .mp4 carrying the
@@ -77,28 +77,49 @@ def kind_ekf(s, save, cam=False, post=False):
                               save=_out(save, f"{s.id}_ekf_timeseries.png"),
                               from_log_cov=r["from_log_cov"])
     if cam:
-        kind_overlay(s, save, post=post)
+        kind_overlay(s, save, post=post, compare=compare)
 
 
-def kind_overlay(s, save, cam=False, post=False):
-    """The recording with the payload estimate and the flown reference on it.
+def _as_flown_records(s):
+    """The records `overlay` draws when `post` is not set.
 
     Where the aircraft flew the filter itself, its logged states are what goes
     on the picture: that is the estimate the controller actually steered on,
     and re-running the filter offline would draw a different one. Only runs
     that predate the onboard filter are estimated here.
+    """
+    import ekf_plots
+    if catalog.has_logged_states(s.fl):
+        return ekf_plots.logged_records(s)
+    return ekf_plots.analyze(s, verbose=False)["records"]
+
+
+def kind_overlay(s, save, cam=False, post=False, compare=False):
+    """The recording with the payload estimate and the flown reference on it.
 
     With `post`, the filter is re-run offline on the geometry and tuning in the
     session's own config_snapshot.json. That is what you want once you have
     calibrated something the flight itself did not know: editing the snapshot
     afterwards cannot move states that were already logged, so it would
     otherwise only move the drawing, not the estimate.
+
+    With `compare`, both are drawn on the same video -- the as-flown estimate
+    in vivid cyan, the post-hoc re-run in green -- instead of choosing one.
     """
     import ekf_plots
-    if post or not catalog.has_logged_states(s.fl):
-        records = ekf_plots.analyze(s, verbose=False)["records"]
-    else:
-        records = ekf_plots.logged_records(s)
+
+    if compare:
+        records_post = ekf_plots.analyze(s, verbose=False)["records"]
+        stem = f"{s.id}_compare"
+        out = _out(save, stem + ekf_plots.OVERLAY_SUFFIX)
+        if out is None:
+            out = s.pose.parent / (stem + ekf_plots.OVERLAY_SUFFIX)
+        ekf_plots.overlay_compare_video(s, _as_flown_records(s), records_post,
+                                        save=out)
+        return
+
+    records = (ekf_plots.analyze(s, verbose=False)["records"] if post
+              else _as_flown_records(s))
 
     # a post-hoc run gets its own name, so it never overwrites the estimate the
     # aircraft actually flew on
@@ -132,6 +153,10 @@ def main(argv=None):
                     help="overlay only: re-run the EKF offline on the session's "
                          "config_snapshot.json, instead of drawing the states "
                          "the aircraft logged")
+    ap.add_argument("--compare", action="store_true",
+                    help="overlay only: draw both the as-flown estimate "
+                         "(vivid cyan) and a post-hoc re-run (green) on the "
+                         "same video")
     ap.add_argument("--root", default=None, help="override the data root")
     args = ap.parse_args(argv)
 
@@ -163,6 +188,10 @@ def main(argv=None):
         ap.error("--cam only applies to `ekf`")
     if args.post and args.kind not in ("overlay", "ekf"):
         ap.error("--post only applies to `overlay` and `ekf --cam`")
+    if args.compare and args.kind not in ("overlay", "ekf"):
+        ap.error("--compare only applies to `overlay` and `ekf --cam`")
+    if args.compare and args.post:
+        ap.error("--compare already re-runs the filter post-hoc; drop --post")
 
     try:
         s = catalog.resolve(args.selector)
@@ -175,7 +204,8 @@ def main(argv=None):
     if s.has_camera:
         print(f"   cam  {s.pose}   offset {s.pose_offset:+.2f} s")
 
-    KINDS[args.kind](s, args.save, cam=args.cam, post=args.post)
+    KINDS[args.kind](s, args.save, cam=args.cam, post=args.post,
+                     compare=args.compare)
 
     if args.save:
         print(f"figures written to {args.save}/")

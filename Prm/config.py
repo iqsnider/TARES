@@ -1,5 +1,7 @@
 import numpy as np
 
+import sim.transformations as tf
+
 PI = np.pi
 GRAVITY = 9.81  # [m/s^2]
 
@@ -42,7 +44,7 @@ MASS_PAYLOAD = _mass_payload_by_airframe[AIRFRAME]
 DISC_DIAMETER = 0.3  # [m]
 DISC_WIDTH = 0.0025  # [m]
 _tether_len_by_airframe = {"AURELIA_X4": 10.2, "IF1200": 8.1,
-                           "EKF_TEST": 5.8}  # [m]
+                           "EKF_TEST": 5.5}  # [m]
 TETHER_LEN = _tether_len_by_airframe[AIRFRAME]
 
 # [m] tether pivot offset from drone CG in body frame
@@ -82,19 +84,6 @@ CAM_OFFSET_Z = _cam_offset_z_by_airframe[AIRFRAME]
 
 # camera rotation
 
-
-def Rx(a): c, s = np.cos(a), np.sin(a); return np.array(
-    [[1, 0, 0], [0, c, -s], [0, s, c]])
-
-
-def Ry(a): c, s = np.cos(a), np.sin(a); return np.array(
-    [[c, 0, s], [0, 1, 0], [-s, 0, c]])
-
-
-def Rz(a): c, s = np.cos(a), np.sin(a); return np.array(
-    [[c, -s, 0], [s, c, 0], [0, 0, 1]])
-
-
 _cam_roll_by_airframe = {"AURELIA_X4": 0, "IF1200": 0, "EKF_TEST": 0}
 _cam_pitch_by_airframe = {"AURELIA_X4": 0, "IF1200": 0, "EKF_TEST": 0}
 _cam_yaw_by_airframe = {"AURELIA_X4": PI/2, "IF1200": PI, "EKF_TEST": 0}
@@ -105,10 +94,8 @@ CAM_PITCH = _cam_pitch_by_airframe[AIRFRAME]
 # rad, about vertical axis (+Z, top), right hand rule (0 when up on the camera frame is in the drone nose direction)
 CAM_YAW = _cam_yaw_by_airframe[AIRFRAME]
 
-# camera at zero rpy stares straight down, top of the image toward the nose
-R_CAM_DOWN = np.diag([1, -1, -1])
-R_MOUNT = Rz(CAM_YAW)@Rx(CAM_PITCH)@Ry(CAM_ROLL)
-CAM_R = R_MOUNT@R_CAM_DOWN
+# rotation to the body frame from the camera frame
+CAM_R = tf.T_BC(CAM_ROLL, CAM_PITCH, CAM_YAW)
 
 
 # payload marker parameters
@@ -219,7 +206,7 @@ EKF_Q_YAW = _ekf_q_yaw_by_airframe[AIRFRAME]
 # swing damping ratio. 0 is the undamped pendulum the model started as; 0.2
 # measured out better than 0 at every prediction horizon on both 0819 payload
 # flights. Get it per rig from the free decay of a released swing
-_ekf_zeta_by_airframe = {"AURELIA_X4": 0, "IF1200": 0, "EKF_TEST": 0}
+_ekf_zeta_by_airframe = {"AURELIA_X4": 0, "IF1200": 0.05, "EKF_TEST": 0}
 EKF_ZETA = _ekf_zeta_by_airframe[AIRFRAME]
 
 # measurement noise: bearing and payload yaw [rad]

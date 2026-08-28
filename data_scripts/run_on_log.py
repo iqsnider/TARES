@@ -2,6 +2,7 @@ import numpy as np
 import math
 import sim.estimation.ekf as ekfm
 import sim.estimation.pre_process as pp
+import sim.transformations as tf
 
 G = 9.80665
 
@@ -17,7 +18,8 @@ def build_inputs(fl):
     a_I = np.empty_like(a_frd)
 
     for i in range(len(fl)):
-        a_I[i] = ekfm.T_IB_fn(phi[i], theta[i], psi[i]) @ (ekfm.P_SWAP @ a_frd[i])
+        a_ned = tf.T_IB(phi[i], theta[i], psi[i]) @ a_frd[i]
+        a_I[i] = tf.T_ENU_from_NED() @ a_ned
 
     return dict(t=fl.cur_time.to_numpy(), a_I=a_I, phi=phi, theta=theta, psi=psi)
 
@@ -57,6 +59,7 @@ def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
     """
     geom = pp.DEFAULT_GEOMETRY if geom is None else geom
     t_fl = inp["t"]
+    S = tf.T_ENU_from_NED()
     filt = None
     t_prev = None
     out = []
@@ -75,8 +78,8 @@ def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
         if filt is None:
             if held:
                 continue
-            init_ekf = pp.swing_angles(frame, ekfm.T_IB_fn(phi, theta, psi),
-                                       geom=geom)
+            T_IB = S @ tf.T_IB(phi, theta, psi) @ S
+            init_ekf = pp.swing_angles(frame, T_IB, geom=geom)
 
             if init_ekf is None:
                 continue

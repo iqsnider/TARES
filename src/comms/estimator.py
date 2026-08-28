@@ -9,6 +9,7 @@ import numpy as np
 import Prm.config as config
 import sim.estimation.ekf as ekf_lib
 import sim.estimation.pre_process as pp
+import sim.transformations as tf
 
 
 # RAW_IMU reports in milli-g
@@ -55,7 +56,8 @@ def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5,
     source = config.EKF_SOURCE if source is None else source
     c = logger.cache
     phi, theta, psi = c["roll"], c["pitch"], c["yaw"]
-    T_IB = ekf_lib.T_IB_fn(phi, theta, psi)
+    S = tf.T_ENU_from_NED()
+    T_IB = S @ tf.T_IB(phi, theta, psi) @ S
 
     deadline = time.time() + detect_timeout
     while True:
@@ -87,9 +89,9 @@ def accel_enu(cache):
     swing worse than feeding it nothing.
     """
     a_frd = np.array(cache["imu"][0:3], dtype=float)*G_MSS/1000
-    T_IB = ekf_lib.T_IB_fn(cache["roll"], cache["pitch"], cache["yaw"])
+    a_ned = tf.T_IB(cache["roll"], cache["pitch"], cache["yaw"]) @ a_frd
 
-    a_I = np.nan_to_num(T_IB @ (ekf_lib.P_SWAP @ a_frd))
+    a_I = np.nan_to_num(tf.T_ENU_from_NED() @ a_ned)
 
     return a_I
 
@@ -101,7 +103,8 @@ def step_ekf(ekf, meas, a_I, dt, phi, theta, psi):
     meas is whatever the running tracker produced: the pose dict from
     MarkerPoseRecorder, or the detection from ColorCircleRecorder.
     """
-    ekf.T_IB = ekf_lib.T_IB_fn(phi, theta, psi)
+    S = tf.T_ENU_from_NED()
+    ekf.T_IB = S @ tf.T_IB(phi, theta, psi) @ S
     ekf.innov = None
 
     xi, P = ekf.ekf_predict(ekf.xi, ekf.P, a_I, dt)

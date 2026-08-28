@@ -1,4 +1,5 @@
 import Prm.config as config
+import sim.transformations as tf
 
 import math
 import numpy as np
@@ -30,9 +31,7 @@ def nonlinear_ode(x, u):
     sax, cax = math.sin(alx), math.cos(alx)
     say, cay = math.sin(aly), math.cos(aly)
 
-    T_EB = np.array([[ct*cy, sp*st*cy - cp*sy, cp*st*cy + sp*sy],
-                     [ct*sy, sp*st*sy + cp*cy, cp*st*sy - sp*cy],
-                     [-st, sp*ct, cp*ct]])
+    T_EB = tf.T_IB(phi, theta, psi)
 
     F_thrust_I = T_EB @ np.array([0, 0, C_Sigma])
     Ftx, Fty, Ftz = F_thrust_I

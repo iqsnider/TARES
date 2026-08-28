@@ -5,6 +5,7 @@ import numpy as np
 import Prm.config as config
 import sim.dynamics as dynamics
 import sim.estimation.ekf as ekfm
+import sim.transformations as tf
 
 from logs.flight import FlightLogger
 
@@ -28,6 +29,21 @@ ACCEL_ONLY_LOCK_YAW = (M.POSITION_TARGET_TYPEMASK_X_IGNORE
                        | M.POSITION_TARGET_TYPEMASK_VX_IGNORE
                        | M.POSITION_TARGET_TYPEMASK_VY_IGNORE
                        | M.POSITION_TARGET_TYPEMASK_VZ_IGNORE)
+
+
+def get_state_enu(ned, prev=None):
+    """
+    Converts a LOCAL_POSITION_NED position/velocity state to ENU
+    """
+    if ned is None or np.isnan(ned[0]):
+        return prev  # nothing yet this session -> reuse last known state
+
+    S = tf.T_ENU_from_NED()
+    p_enu = S @ np.asarray(ned[0:3])
+    v_enu = S @ np.asarray(ned[3:6])
+    state = np.concatenate([p_enu, v_enu])
+
+    return state
 
 
 class ControlComms:
@@ -76,7 +92,7 @@ class ControlComms:
             self.logger.pump(self.m)
 
             # intialize the state
-            self.x0 = self.get_state_enu(self.logger.cache['ned'], prev=None)
+            self.x0 = get_state_enu(self.logger.cache['ned'], prev=None)
 
             if time.time() > t_wait:
                 raise RuntimeError(
@@ -95,13 +111,6 @@ class ControlComms:
         while self.logger.cache['fc_time_boot_ms'] == stale:
             self.logger.pump(self.m)
             time.sleep(0.002)
-
-    @staticmethod
-    def enu_ned(v):
-        """
-        (E,N,U) <-> (N,E,D), self-inverse
-        """
-        return np.array([v[1], v[0], -v[2]])
 
     def set_rate(self, name, hz):
         """
@@ -133,18 +142,6 @@ class ControlComms:
             self.set_rate(name, rate)
             time.sleep(0.05)
 
-    @staticmethod
-    def get_state_enu(ned, prev=None):
-        """
-        Converts NED state to ENU state
-        """
-        if ned is None or np.isnan(ned[0]):
-            return prev  # nothing yet this session -> reuse last known state
-        x, y, z, vx, vy, vz = ned
-        p_enu = np.array([y, x, -z])
-        v_enu = np.array([vy, vx, -vz])
-
-        return np.concatenate([p_enu, v_enu])
 
     def send_accel(self, a_ned, yaw=None):
         """
@@ -227,7 +224,7 @@ class ControlComms:
                 self._debug_stream_rate(t, dbg)
 
             # get current state p,v
-            x = self.get_state_enu(self.logger.cache['ned'], prev=x)
+            x = get_state_enu(self.logger.cache['ned'], prev=x)
 
             # get the reference p,v from the trajectory
             p_ref, v_ref = ref(t)
@@ -237,9 +234,9 @@ class ControlComms:
 
             # set setpoint msg bitmasks depending on whether or not we are commanding yaw
             if yaw_lock:
-                mask = self.send_accel(self.enu_ned(u), yaw=yaw_ref)
+                mask = self.send_accel(tf.T_ENU_from_NED() @ u, yaw=yaw_ref)
             else:
-                mask = self.send_accel(self.enu_ned(u))
+                mask = self.send_accel(tf.T_ENU_from_NED() @ u)
 
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
@@ -292,7 +289,7 @@ class ControlComms:
         # The whole track shifts with it, which is what a relative end wants
         self.logger.pump(self.m)
         c = self.logger.cache
-        x = self.get_state_enu(c['ned'], prev=x)
+        x = get_state_enu(c['ned'], prev=x)
         last_seq, meas = est.latest_measurement(recorder, ekf.source)
         xi, _ = est.step_ekf(ekf, meas, est.accel_enu(c), dt,
                              c['roll'], c['pitch'], c['yaw'])
@@ -324,7 +321,7 @@ class ControlComms:
                 self._debug_stream_rate(t, dbg)
 
             # get current drone state p,v
-            x = self.get_state_enu(c['ned'], prev=x)
+            x = get_state_enu(c['ned'], prev=x)
 
             # fold in the camera only when the frame is new
             seq, meas = est.latest_measurement(recorder, ekf.source)
@@ -352,9 +349,9 @@ class ControlComms:
 
             # set setpoint msg bitmasks depending on whether or not we are commanding yaw
             if yaw_lock:
-                mask = self.send_accel(self.enu_ned(u), yaw=yaw_ref)
+                mask = self.send_accel(tf.T_ENU_from_NED() @ u, yaw=yaw_ref)
             else:
-                mask = self.send_accel(self.enu_ned(u))
+                mask = self.send_accel(tf.T_ENU_from_NED() @ u)
 
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
@@ -378,19 +375,6 @@ class ControlComms:
             # time step
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
-
-
-def get_state_enu(ned, prev=None):
-    """
-    Converts NED state to ENU state
-    """
-    if ned is None or np.isnan(ned[0]):
-        return prev  # nothing yet this session -> reuse last known state
-    x, y, z, vx, vy, vz = ned
-    p_enu = np.array([y, x, -z])
-    v_enu = np.array([vy, vx, -vz])
-
-    return np.concatenate([p_enu, v_enu])
 
 
 # check math

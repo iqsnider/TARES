@@ -1,22 +1,5 @@
-"""Find flight sessions without being told where they are.
-
-Every file the logger writes carries a ``YYYYMMDD_HHMMSS`` stamp, so the data
-directory is already an index -- it just is not queryable. This module reads
-that structure back out: it walks the tree, pairs each flight log with the
-camera run recorded alongside it, and hands back `Session` objects you select
-by name instead of by path.
-
-    catalog.resolve("latest")             newest session
-    catalog.resolve("07232026.last")      last run of 23 Jul 2026
-    catalog.resolve("07232026.114556")    one run, named in full
-
-Nothing here is written to disk and nothing needs maintaining: the walk costs
-about half a second over the whole archive, so the index is rebuilt on every
-call rather than cached and left to go stale. Your own notes, and which of a
-handful of old runs came out of the simulator, live in sessions.toml next to
-this file: nothing else can be derived from the data. Geometry comes off
-each session's own config_snapshot.json, and the pose/flight clock offset
-off the wall clock both logs stamp on every row.
+"""
+Find flight sessions without being told where they are
 """
 import datetime as _dt
 import os
@@ -26,6 +9,7 @@ from functools import cached_property
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 # Root of the archive. Point TARES_DATA elsewhere to work off a copy.
 DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
@@ -39,11 +23,11 @@ TRACK_GLOBS = ("poses*.csv", "circles*.csv")
 # Pairing a camera run with its flight log, by folder stamp. The stamp is
 # taken when the recorder starts, which is before the camera device is open,
 # so it can sit well ahead of the first frame -- only good to a few seconds.
-PAIR_TOLERANCE_S = 5.0
+PAIR_TOLERANCE_S = 5
 
 # Pairing on the wall_time both files now carry. That is the same clock read
 # in both, so the slack is only for the order the two were started in.
-WALL_TOLERANCE_S = 60.0
+WALL_TOLERANCE_S = 60
 
 _TS = re.compile(r"(\d{8})_(\d{6})")
 
@@ -59,43 +43,47 @@ _LEGACY_NAMES = {"t": "cur_time",
 
 
 def _metadata():
-    """The whole sessions.toml document, or an empty one."""
+    """
+    The whole sessions.toml document
+    """
     if not META_FILE.exists():
         return {}
+
     with open(META_FILE, "rb") as f:
         return tomllib.load(f)
 
 
 def defaults():
-    """The [defaults] table: what holds for every session unless overridden."""
+    """
+    The [defaults] table
+    """
     return _metadata().get("defaults", {})
 
 
 def _as_date(token):
-    """A YYYYMMDD key from MMDDYYYY (how the folders are named) or YYYYMMDD.
-
-    Only one of the two ever parses -- 07232026 has no month 20, 20260723 has
-    no month 07 in the trailing year slot -- so there is nothing to guess.
+    """
+    A YYYYMMDD key from MMDDYYYY  or YYYYMMDD.
     """
     for fmt in ("%m%d%Y", "%Y%m%d"):
         try:
             return _dt.datetime.strptime(token, fmt).strftime("%Y%m%d")
+
         except ValueError:
             continue
+
     return None
 
 
 def _first(path, column):
-    """The first row's `column`, or None if this log predates it.
-
-    One row is read, not the file, so this is cheap enough to call over the
-    whole archive.
     """
-    import pandas as pd
+    The first row's column
+    """
     try:
         d = pd.read_csv(path, usecols=[column], nrows=1)
+
     except (ValueError, OSError):
         return None
+
     return float(d[column].iloc[0]) if len(d) else None
 
 
@@ -322,7 +310,7 @@ def has_logged_states(d):
 def has_logged_covariance(d):
     """Whether this log also carries the onboard filter's psi_p and covariance."""
     has_cov = (set(LOGGED_COV_COLS) <= set(d.columns)
-              and bool(d[list(LOGGED_COV_COLS)].notna().to_numpy().any()))
+               and bool(d[list(LOGGED_COV_COLS)].notna().to_numpy().any()))
     return has_cov
 
 
@@ -420,7 +408,8 @@ def _pair_by_wall_clock(pool, poses):
     if not left:
         return
 
-    free = [(s, _first(s.flight, "wall_time")) for s in pool if not s.has_camera]
+    free = [(s, _first(s.flight, "wall_time"))
+            for s in pool if not s.has_camera]
     free = [(s, w) for s, w in free if w is not None]
 
     for p, w in left:
@@ -526,7 +515,8 @@ def resolve(selector, pool=None):
         names = "\n  ".join(f"{s.id}  {s.label}" for s in hits[:12])
         more = "" if len(hits) <= 12 else f"\n  ... and {len(hits)-12} more"
         raise LookupError(
-            f"{selector!r} matches {len(hits)} sessions; narrow it with a time "
+            f"{selector!r} matches {
+                len(hits)} sessions; narrow it with a time "
             f"(e.g. 07232026.114556), .last, .first, or an index:"
             f"\n  {names}{more}")
     return hits[0]
@@ -543,7 +533,8 @@ def format_table(pool):
         where = str(s.flight.parent.relative_to(DATA_ROOT))
         dup = f"  [+{len(s.duplicates)} dup]" if s.duplicates else ""
         # a log with no rows is an aborted run; say so where mode used to
-        flags = d["modes"] if d["modes"] in ("empty", "unreadable") else s.flags
+        flags = d["modes"] if d["modes"] in (
+            "empty", "unreadable") else s.flags
         lines.append(
             f"{i:>3}  {s.id:16}  {d['duration']:6.1f}s  {d['rows']:>6}  "
             f"{d['alt']:6.1f}  {d['ref']:>7}  {flags:7}  {where}{dup}")

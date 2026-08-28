@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 import catalog
 import Prm.config as config
+import sim.transformations as tf
 from sim.plotting import configure_plot_style, C_PAYLOAD, C_REF
 
 configure_plot_style()   # shared serif / Computer Modern theme
@@ -58,29 +59,22 @@ def measured_accel_enu(df, g=G):
     """
     Reconstruct inertial acceleration in ENU from body-frame specific force.
     """
-    fx = df["drone_ax_meas"].to_numpy()*MG_TO_MS2
-    fy = df["drone_ay_meas"].to_numpy()*MG_TO_MS2
-    fz = df["drone_az_meas"].to_numpy()*MG_TO_MS2
+    f_frd = np.column_stack([df["drone_ax_meas"].to_numpy()*MG_TO_MS2,
+                             df["drone_ay_meas"].to_numpy()*MG_TO_MS2,
+                             df["drone_az_meas"].to_numpy()*MG_TO_MS2])
 
     roll = df["drone_roll"].to_numpy()
     pitch = df["drone_pitch"].to_numpy()
     yaw = df["drone_yaw"].to_numpy()
 
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
+    # FRD specific force rotated into NED, then swapped into inertial ENU
+    S = tf.T_ENU_from_NED()
+    a_I = np.array([S @ (tf.T_IB(r, p, y) @ f)
+                    for r, p, y, f in zip(roll, pitch, yaw, f_frd)])
 
-    T_EB = np.array([[cp*cy, sr*sp*cy - cr*sy, cr*sp*cy + sr*sy],
-                     [cp*sy, sr*sp*sy + cr*cy, cr*sp*sy - sr*cy],
-                     [-sp,   sr*cp,            cr*cp]])
-    T_EB = np.moveaxis(T_EB, 2, 0)
+    aE, aN, aU = a_I[:, 0], a_I[:, 1], a_I[:, 2] - g
 
-    f_body = np.stack([fx, fy, fz], axis=1)
-    ned = T_EB @ f_body[..., None]
-
-    n, e, d = ned[:, 0, 0], ned[:, 1, 0], ned[:, 2, 0]
-
-    return e, n, -(d + g) # aE, aN, aU
+    return aE, aN, aU
 
 
 

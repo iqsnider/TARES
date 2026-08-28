@@ -7,11 +7,12 @@ Generates a position/velocity/acceleration reference for the payload from transm
 Then uses the payload swing estimate and payload control system to control the payload.
 """
 # mission control imports
-from comms.control import ControlComms
+from comms.control import ControlComms, get_state_enu
 import comms.common as comms
 
 # autonomy research imports
 import sim.dynamics as dynamics
+import sim.transformations as tf
 import comms.camera as cam
 import comms.estimator as est
 import Prm.config as config
@@ -89,7 +90,7 @@ class StickControl(ControlComms):
         # initialize the payload reference
         self.logger.pump(self.m)
         c = self.logger.cache
-        x = self.get_state_enu(c['ned'], prev=x)
+        x = get_state_enu(c['ned'], prev=x)
         last_seq, meas = est.latest_measurement(self.recorder, self.ekf.source)
         xi, _ = est.step_ekf(self.ekf, meas, est.accel_enu(c), dt,
                              c['roll'], c['pitch'], c['yaw'])
@@ -108,7 +109,7 @@ class StickControl(ControlComms):
             c = self.logger.cache
 
             # get current drone state p,v
-            x = self.get_state_enu(c['ned'], prev=x)
+            x = get_state_enu(c['ned'], prev=x)
 
             # fold in the camera only when the frame is new
             seq, meas = est.latest_measurement(self.recorder, self.ekf.source)
@@ -135,7 +136,7 @@ class StickControl(ControlComms):
             a_des = payload_controller.compute_u(x16 - x_ref)
 
             # send off the bitmask to the FC
-            mask = self.send_accel(self.enu_ned(a_des), yaw=yaw_ref)
+            mask = self.send_accel(tf.T_ENU_from_NED() @ a_des, yaw=yaw_ref)
 
             # confirm the bitmask with the FC
             self.logger.note_sent(bitmask=mask)
@@ -180,7 +181,7 @@ class StickControl(ControlComms):
 
                 # log while idle too, so time outside the control loop is
                 # visible instead of collapsing into a single row
-                x = self.get_state_enu(c['ned'], prev=x)
+                x = get_state_enu(c['ned'], prev=x)
                 self.logger.log(time.time() - self.t0, x)
 
                 time.sleep(1/self.hz)

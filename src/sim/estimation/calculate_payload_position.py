@@ -19,6 +19,7 @@ import pandas as pd
 
 import Prm.config as config
 import sim.estimation.pre_process as pp
+import sim.transformations as tf
 from sim.estimation.pre_process import get_payload_center_in_camera_frame
 
 
@@ -43,14 +44,10 @@ def get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_po
     if payload_center_in_drone_frame is None:
         return None
 
-    P_NED = np.array([[0, 1, 0],
-                      [1, 0, 0],
-                      [0, 0, -1]])
-
-    R_ned = (config.Rz(drone_position_attitude.drone_yaw)
-             @ config.Ry(drone_position_attitude.drone_pitch)
-             @ config.Rx(drone_position_attitude.drone_roll))
-    R = P_NED @ R_ned @ P_NED
+    S = tf.T_ENU_from_NED()
+    R = S @ tf.T_IB(drone_position_attitude.drone_roll,
+                    drone_position_attitude.drone_pitch,
+                    drone_position_attitude.drone_yaw) @ S
 
     # drone position in ENU
     p_drone_inertial = np.array([drone_position_attitude.drone_px_meas,

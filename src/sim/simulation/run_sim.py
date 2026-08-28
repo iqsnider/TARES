@@ -11,11 +11,12 @@ import numpy as np
 
 import Prm.config as config
 import sim.mission_manager as mission
+import sim.transformations as tf
 from sim import plotting
 from sim.simulation import control_law
 from sim.simulation.model import nonlinear_ode, payload_state
 
-from sim.estimation.ekf import EKF, T_IB_fn
+from sim.estimation.ekf import EKF
 
 
 REF_TARGETS = ('payload', 'drone')
@@ -140,7 +141,8 @@ def simulate(architecture, ref, dt=1/config.CONTROL_FREQUENCY, ekf=False, ref_ta
     for i, t in enumerate(ts):
         x = X[i]
 
-        T_IB = T_IB_fn(x[6], x[7], x[8])
+        S = tf.T_ENU_from_NED()
+        T_IB = S @ tf.T_IB(x[6], x[7], x[8]) @ S
         filt.xi, filt.P = filt.ekf_predict(filt.xi, filt.P, a_prev, dt)
         if i % cam_every == 0:
             z = synthetic_measurement(x, T_IB, filt.sigma_xy,

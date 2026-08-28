@@ -4,12 +4,7 @@ import cv2
 
 import Prm.config as config
 import sim.estimation.pre_process as pp
-
-
-# NED <-> ENU swap
-P_SWAP = np.array([[0, 1, 0],
-                   [1, 0, 0],
-                   [0, 0, -1]])
+import sim.transformations as tf
 
 # xi_I = [alpha_x, alpha_y, alpha_dot_x, alpha_dot_y, psi_p]
 STATE_DIM = 5
@@ -32,24 +27,6 @@ def wrap_pi(a):
     Wrap an angle to (-pi, pi]
     """
     return math.atan2(math.sin(a), math.cos(a))
-
-
-def T_IB_fn(phi, theta, psi):
-    """
-    Rotation to the inertial frame from the body frame.
-
-    Body is ENU-ordered (starboard, nose, up) and inertial is ENU, so the
-    standard NED euler matrix is sandwiched between the swap
-    """
-    sp, cp = math.sin(phi), math.cos(phi)
-    st, ct = math.sin(theta), math.cos(theta)
-    sy, cy = math.sin(psi), math.cos(psi)
-
-    T_ned = np.array([[ct*cy, sp*st*cy - cp*sy, cp*st*cy + sp*sy],
-                      [ct*sy, sp*st*sy + cp*cy, cp*st*sy - sp*cy],
-                      [-st, sp*ct, cp*ct]])
-
-    return P_SWAP @ T_ned @ P_SWAP
 
 
 class EKF:
@@ -103,7 +80,8 @@ class EKF:
         self.innov = None
 
         # initialize EKF
-        self.T_IB = T_IB_fn(initial_phi, initial_theta, initial_psi)
+        S = tf.T_ENU_from_NED()
+        self.T_IB = S @ tf.T_IB(initial_phi, initial_theta, initial_psi) @ S
         self.xi = np.array(
             [initial_alpha_x, initial_alpha_y, 0, 0, initial_psi_p])
         self.P = np.diag([sigma_alpha_0**2,
@@ -150,18 +128,19 @@ class EKF:
 
     def euler_integration(self, xi, a_I, dt):
         """
-        Euler integration
+        Improved Euler (Heun's method) integration.
+
+        a_I is held constant across the step, since only one acceleration
+        sample is available per predict call.
         """
-        return xi + dt*self.process_model(xi, a_I)
+        k1 = self.process_model(xi, a_I)
+        k2 = self.process_model(xi + dt*k1, a_I)
+
+        return xi + dt/2*(k1 + k2)
 
     def ekf_predict(self, xi, P, a_I, dt):
         """
         Propagate state and covariance one step.
-
-        Forward Euler on an oscillator gains sqrt(1 + (w*dt)^2) in amplitude
-        every step, so a long stretch with no camera climbs on its own: about
-        2.7x over 5 s at L = 0.5 m and 50 Hz, and 6% at L = 8.1 m. Damping
-        offsets some of it, and a measurement resets it.
         """
         xi = np.asarray(xi, dtype=float)
         P = np.asarray(P, dtype=float)
@@ -303,7 +282,8 @@ class EKF:
         """
         Performs full EKF tick
         """
-        self.T_IB = T_IB_fn(phi, theta, psi)
+        S = tf.T_ENU_from_NED()
+        self.T_IB = S @ tf.T_IB(phi, theta, psi) @ S
 
         self.xi, self.P = self.ekf_predict(self.xi, self.P, a_I, dt)
         if frame is not None:
