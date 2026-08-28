@@ -308,9 +308,22 @@ def has_logged_states(d):
 
 
 def has_logged_covariance(d):
-    """Whether this log also carries the onboard filter's psi_p and covariance."""
-    has_cov = (set(LOGGED_COV_COLS) <= set(d.columns)
-               and bool(d[list(LOGGED_COV_COLS)].notna().to_numpy().any()))
+    """Whether this log also carries the onboard filter's psi_p and covariance.
+
+    Numeric as well as present: an Aug 2026 stick run wrote the whole 5x5
+    covariance into the four scalar columns, so those rows hold a printed
+    array rather than a number. Such a log reads as having no covariance,
+    which costs the uncertainty band and nothing else.
+    """
+    if not set(LOGGED_COV_COLS) <= set(d.columns):
+        return False
+
+    cols = d[list(LOGGED_COV_COLS)]
+    if not all(pd.api.types.is_numeric_dtype(cols[c]) for c in LOGGED_COV_COLS):
+        return False
+
+    has_cov = bool(cols.notna().to_numpy().any())
+
     return has_cov
 
 

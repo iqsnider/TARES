@@ -13,6 +13,7 @@ import comms.common as comms
 # autonomy research imports
 import sim.dynamics as dynamics
 import sim.transformations as tf
+import sim.estimation.ekf as ekfm
 import comms.camera as cam
 import comms.estimator as est
 import Prm.config as config
@@ -148,8 +149,12 @@ class StickControl(ControlComms):
                             payload_v_ref=v_ref,
                             payload_alpha=(xi[0], xi[1]),
                             payload_alphadot=(xi[2], xi[3]),
+                            payload_psi_p=xi[ekfm.IX_PSI_P],
                             payload_innov=self.ekf.innov,
-                            payload_cov=P)
+                            payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                         P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
 
             # set the mode
             self.mode = c["echoed_mode"]
@@ -349,8 +354,12 @@ class StickControl(ControlComms):
                             payload_v_ref=v_ref,
                             payload_alpha=(xi[0], xi[1]),
                             payload_alphadot=(xi[2], xi[3]),
+                            payload_psi_p=xi[ekfm.IX_PSI_P],
                             payload_innov=self.ekf.innov,
-                            payload_cov=P)
+                            payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                         P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
 
     def _close_link(self):
         """
