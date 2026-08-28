@@ -101,7 +101,6 @@ class ControlComms:
             # wait 10ms before retrying
             time.sleep(0.01)
 
-
     def _wait_fresh_state(self):
         """
         Pump until a new LOCAL_POSITION_NED arrives, so the first control tick
@@ -142,7 +141,6 @@ class ControlComms:
             self.set_rate(name, rate)
             time.sleep(0.05)
 
-
     def send_accel(self, a_ned, yaw=None):
         """
         sends the acceleration setpoint to ardupilot and returns the bitmask
@@ -177,7 +175,8 @@ class ControlComms:
             state['last_lp'] = lp
 
         if t - state['last_report'] > 1:
-            print(f"LOCAL_POSITION_NED ~{state['n_lp']/(t-state['last_report']):.1f} Hz")
+            print(f"LOCAL_POSITION_NED ~{
+                  state['n_lp']/(t-state['last_report']):.1f} Hz")
             state['n_lp'] = 0
             state['last_report'] = t
 
@@ -189,7 +188,9 @@ class ControlComms:
 
     def fly_drone_trajectory(self, ref, controller, duration, yaw_lock=True,
                              yaw_ref=None, reassert=False, recorder=None,
-                             ekf=None):
+                             ekf=None,
+                             blackout_time=None,
+                             blackout_duration=None):
         """
         Trajectory following control loop for only the drone
 
@@ -257,12 +258,15 @@ class ControlComms:
             if watching:
                 c = self.logger.cache
 
-                # fold in the camera only when the frame is new
-                seq, meas = est.latest_measurement(recorder, ekf.source)
-                if seq == last_seq:
-                    meas = None
+                if blackout_time is not None and t > blackout_time and t < (blackout_time + blackout_duration):
+                    seq = last_seq
+
                 else:
-                    last_seq = seq
+                    seq, meas = est.latest_measurement(recorder, ekf.source)
+                    if seq == last_seq:
+                        meas = None
+                    else:
+                        last_seq = seq
 
                 dt_ekf = dt if t_prev is None else t - t_prev
                 t_prev = t
@@ -407,9 +411,9 @@ class ControlComms:
                             payload_psi_p=xi[ekfm.IX_PSI_P],
                             payload_innov=ekf.innov,
                             payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
-                                        P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
-                                        P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
-                                        P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
+                                         P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
 
             # time step
             next_t += dt

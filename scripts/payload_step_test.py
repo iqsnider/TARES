@@ -1,11 +1,12 @@
 """
-drone lqi hover test
+This test is for running the closed-loop payload reference tracker and payload lqr control system with payload state estimator
 """
 # mission control imports
 import comms.common as comms
 from comms.control import ControlComms
 
 # autonomy research imports
+import comms.trajectory as mission
 import sim.dynamics as dynamics
 import comms.camera as cam
 import comms.estimator as est
@@ -14,22 +15,20 @@ import Prm.config as config
 # logging
 from logs.flight import FlightLogger
 
-# math imports
-import numpy as np
 
 from datetime import datetime
-
-
-HOVER_S = 60
 
 
 if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
+    # connection = "udp:127.0.0.1:14550"
+    # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
+    speed = 1
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08282026/drone_lqi_hover_test_{stamp}"
+    data_dir = f"data/test_08282026/payload_step_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":
@@ -47,45 +46,52 @@ if __name__ == '__main__':
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
 
+    # start camera first, whichever tracker config.EKF_SOURCE selects
+    recorder, cam_thread = cam.start_payload_camera(
+        video_out=video_out,
+        csv_out=poses_out)
+
     controlLink = None
-    recorder = cam_thread = ekf = None
     try:
         # initalize control communications and prepare datastream for high rate control requests
         controlLink = ControlComms(m,
                                    control_frequency=control_freq,
                                    logger=logger)
 
-        try:
-            recorder, cam_thread = cam.start_payload_camera(
-                video_out=video_out,
-                csv_out=poses_out)
-            ekf = est.start_ekf(logger, recorder=recorder)
-        except Exception as e:
-            print(f"payload filter not running ({e}); hovering without it")
-            ekf = None
+        # mission reference
+        startPointHoverTime = 30
+        endPointHoverTime = 30
 
-        p_hover = controlLink.x0[0:3].copy()
-
-        def ref(t):
-            return p_hover, np.zeros(3)
+        # ENU to ENU. payload_trajectory()
+        # reference is where payload should be
+        ref = mission.SafeTrajectory(m, None, [0, -30, 0], speed=speed,
+                                     startPointHoverTime=startPointHoverTime,
+                                     endPointHoverTime=endPointHoverTime,
+                                     startFromCurrentPosition=True,
+                                     relativeEnd=True,
+                                     logger=logger).payload_trajectory()
 
         # define outer-loop control law
-        controller = dynamics.OuterLoopLQI()
+        controller = dynamics.OuterLoopPayloadLQI()
         logger.set_controller(controller)
 
+        # payload swing estimator: attitude comes from the logger cache, which
+        # ControlComms has already populated by blocking for the first state
+        ekf = est.start_ekf(logger, recorder=recorder)
+
         # run autonomy
-        print(f"holding {p_hover.round(2)} ENU for {HOVER_S}s with LQI...")
+        print("running payload controller...")
 
         # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
         comms.set_guid_options(m, 48)
 
-        controlLink.fly_drone_trajectory(ref,
-                                         controller,
-                                         duration=HOVER_S,
-                                         yaw_lock=True,
-                                         reassert=False,
-                                         recorder=recorder,
-                                         ekf=ekf)
+        controlLink.fly_payload_trajectory(ref,
+                                           controller,
+                                           duration=ref.duration,
+                                           recorder=recorder,
+                                           ekf=ekf,
+                                           yaw_lock=True,
+                                           reassert=False)
     finally:
         try:
             if controlLink is None or not controlLink.pilot_override:
@@ -96,7 +102,6 @@ if __name__ == '__main__':
             # stop the camera first so it flushes its video and pose csv
             # then close the flight logger
             comms.set_guid_options(m, 0)
-            if recorder is not None:
-                recorder.stop()
-                cam_thread.join(timeout=5)
+            recorder.stop()
+            cam_thread.join(timeout=5)
             logger.close()

@@ -308,7 +308,6 @@ class StickControl(ControlComms):
             # get current drone state p,v
             x = get_state_enu(c['ned'], prev=x)
 
-            # simulate camera blackout, very dangerous be careful
             if blackout_time is not None and t > blackout_time and t < (blackout_time + blackout_duration):
                 seq = last_seq
 

@@ -1,11 +1,12 @@
 """
-drone lqi hover test
+drone step test with lqi
 """
 # mission control imports
 import comms.common as comms
 from comms.control import ControlComms
 
 # autonomy research imports
+import comms.trajectory as mission
 import sim.dynamics as dynamics
 import comms.camera as cam
 import comms.estimator as est
@@ -14,22 +15,20 @@ import Prm.config as config
 # logging
 from logs.flight import FlightLogger
 
-# math imports
-import numpy as np
 
 from datetime import datetime
-
-
-HOVER_S = 60
 
 
 if __name__ == '__main__':
     connection = "/dev/ttyACM0"
     baud = 115200
+    # connection = "udp:127.0.0.1:14550"
+    # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
+    speed = 1
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08282026/drone_lqi_hover_test_{stamp}"
+    data_dir = f"data/test_08282026/drone_step_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":
@@ -55,37 +54,48 @@ if __name__ == '__main__':
                                    control_frequency=control_freq,
                                    logger=logger)
 
+        # mission reference
+        startPointHoverTime = 30
+        endPointHoverTime = 30
+
+        # ENU to ENU. payload_trajectory()
+        ref = mission.SafeTrajectory(m, None, [0, -30, 0], speed=speed,
+                                     startPointHoverTime=startPointHoverTime,
+                                     endPointHoverTime=endPointHoverTime,
+                                     startFromCurrentPosition=True,
+                                     relativeEnd=True,
+                                     logger=logger).drone_trajectory()
+
+        # define outer-loop control law
+        controller = dynamics.OuterLoopLQI()
+        logger.set_controller(controller)
+
+        # payload swing estimator: attitude comes from the logger cache, which
+        # ControlComms has already populated by blocking for the first state.
+        # It only watches here, so a camera that will not start costs the
+        # swing record and nothing else, and the step still flies
         try:
             recorder, cam_thread = cam.start_payload_camera(
                 video_out=video_out,
                 csv_out=poses_out)
             ekf = est.start_ekf(logger, recorder=recorder)
         except Exception as e:
-            print(f"payload filter not running ({e}); hovering without it")
+            print(f"payload filter not running ({e}); stepping without it")
             ekf = None
 
-        p_hover = controlLink.x0[0:3].copy()
-
-        def ref(t):
-            return p_hover, np.zeros(3)
-
-        # define outer-loop control law
-        controller = dynamics.OuterLoopLQI()
-        logger.set_controller(controller)
-
         # run autonomy
-        print(f"holding {p_hover.round(2)} ENU for {HOVER_S}s with LQI...")
+        print("running drone LQI step...")
 
         # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
         comms.set_guid_options(m, 48)
 
         controlLink.fly_drone_trajectory(ref,
                                          controller,
-                                         duration=HOVER_S,
-                                         yaw_lock=True,
-                                         reassert=False,
+                                         duration=ref.duration,
                                          recorder=recorder,
-                                         ekf=ekf)
+                                         ekf=ekf,
+                                         yaw_lock=True,
+                                         reassert=False)
     finally:
         try:
             if controlLink is None or not controlLink.pilot_override:
