@@ -10,7 +10,7 @@
   "K_M": 0.02,
   "MASS_TETHER": 0.68,
   "MASS_PAYLOAD": 1.13,
-  "TETHER_LEN": 2,
+  "TETHER_LEN": 5.5,
   "CAM_EXP_ABS": 2,
   "CAM_OFFSET_X": -0.34,
   "CAM_OFFSET_Y": 0.12,
