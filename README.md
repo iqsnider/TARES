@@ -14,10 +14,6 @@ uv run data_scripts/plot.py 0828.last ekf
 uv run data_scripts/plot.py 0828.15 overlay
 ```
 
-Kinds are `drone` (what the flight log alone shows), `traj` (3-D track),
-`ekf` (filter against the per-frame camera measurement), and `overlay`.
-Figures only display; pass `--save DIR` to write them.
-
 ### overlay
 
 Writes an `.mp4` file with a stats overlay given the data logs from a flight test.
