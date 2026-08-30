@@ -47,11 +47,32 @@ def measurement_z(meas, T_IB, source, geom=None):
     return pp.measurement_from_poses(meas, T_IB, geom=geom)
 
 
-def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5,
-              source=None):
+def swing_angles_of(meas, T_IB, source, geom=None):
+    """
+    Swing angles from either tracker's detection, or None with nothing seen.
+
+    (alpha_x, alpha_y, psi_p) either way, though a color ring measures no
+    yaw and reports 0 for it.
+    """
+    geom = pp.DEFAULT_GEOMETRY if geom is None else geom
+    if not meas:
+        return None
+
+    if source == ekf_lib.SOURCE_COLOR:
+        return pp.swing_angles_from_circle(meas["p_C"], T_IB, geom=geom)
+
+    return pp.swing_angles_from_poses(meas, T_IB, geom=geom)
+
+
+def start_ekf(logger, recorder, detect_timeout=5, source=None):
     """
     Build an EKF seeded from the current drone attitude and the first
     payload detection, from whichever tracker is running.
+
+    Seeded at the angles that detection actually implies, not at zero: the
+    stick loop takes its payload reference off this estimate the moment the
+    loop starts, so a filter that begins hanging straight down puts the
+    reference a whole swing away from the payload.
     """
     source = config.EKF_SOURCE if source is None else source
     c = logger.cache
@@ -62,14 +83,9 @@ def start_ekf(logger, recorder, alpha_x=0, alpha_y=0, detect_timeout=5,
     deadline = time.time() + detect_timeout
     while True:
         _, meas = latest_measurement(recorder, source)
-        z = measurement_z(meas, T_IB, source)
-        if z is not None:
-            # a color ring carries no yaw to seed psi_p with, so it starts at 0
-            psi_p = (z[pp.IX_PSI_MEAS] if source == ekf_lib.SOURCE_ARUCO
-                     else 0)
-
-            return ekf_lib.EKF(phi, theta, psi, alpha_x, alpha_y, psi_p,
-                               source=source)
+        seed = swing_angles_of(meas, T_IB, source)
+        if seed is not None:
+            return ekf_lib.EKF(phi, theta, psi, *seed, source=source)
         if time.time() > deadline:
             raise RuntimeError(
                 f"no payload detection within {detect_timeout}s: the filter "

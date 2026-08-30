@@ -250,6 +250,46 @@ def swing_angles(frame, T_IB, geom=DEFAULT_GEOMETRY):
     return alpha_x, alpha_y, psi_p
 
 
+def swing_angles_from_poses(poses, T_IB, geom=DEFAULT_GEOMETRY):
+    """
+    Live equivalent of swing_angles, taking the recorder's pose dict.
+
+    poses is {marker_id: (rvec, tvec)} straight off MarkerPoseRecorder, the
+    same shape measurement_from_poses reads.
+    """
+    if not poses:
+        return None
+
+    detection = center_from_records(
+        [(mid, rvec, tvec) for mid, (rvec, tvec) in poses.items()], geom=geom)
+    if detection is None:
+        return None
+    p_ctr_C, mC = detection
+
+    b = shift_origin(p_ctr_C, geom=geom)
+    alpha_x, alpha_y = alpha_from_q_I(T_IB @ (geom.T_BC @ b))
+    psi_p = payload_yaw(mC, T_IB, geom=geom)
+
+    return alpha_x, alpha_y, psi_p
+
+
+def swing_angles_from_circle(p_C, T_IB, geom=DEFAULT_GEOMETRY):
+    """
+    One color detection (alpha_x, alpha_y, psi_P), or None with no detection.
+
+    Shaped like swing_angles so a caller can seed a filter from either
+    tracker, but a ring is symmetric and carries no orientation, so the yaw
+    it reports is 0 rather than measured.
+    """
+    if p_C is None:
+        return None
+
+    b = shift_origin(p_C, geom=geom)
+    alpha_x, alpha_y = alpha_from_q_I(T_IB @ (geom.T_BC @ b))
+
+    return alpha_x, alpha_y, 0
+
+
 def marker_bearings(frame, geom=DEFAULT_GEOMETRY):
     """
     The individual markers behind the board center

@@ -59,6 +59,26 @@ def get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_po
     return p_payload_inertial
 
 
+def payload_center_in_camera(frame, geom=pp.DEFAULT_GEOMETRY):
+    """
+    The payload center in the camera frame, from whichever tracker wrote it.
+
+    A color run already stores that center per frame in x,y,z; a marker run
+    stores a pose per marker and the center has to be solved for.
+    """
+    if "marker_id" not in frame.columns:
+        row = frame.iloc[0]
+        if not np.isfinite(row.get("u_px", np.nan)):
+            return None
+        return np.array([row.x, row.y, row.z], float)
+
+    detection = get_payload_center_in_camera_frame(frame, geom=geom)
+    if detection is None:
+        return None
+
+    return detection[0]
+
+
 def get_attitude_at(drone_df, time_s, time_offset=0):
     """
     Nearest flight-log row to a camera timestamp
@@ -71,10 +91,9 @@ def get_payload_position_ENU(frame, drone_position_attitude, geom=pp.DEFAULT_GEO
     """
     Computes the payload position in the inertial frame ENU
     """
-    detection = get_payload_center_in_camera_frame(frame, geom=geom)
-    if detection is None:
+    payload_center_in_camera_frame = payload_center_in_camera(frame, geom=geom)
+    if payload_center_in_camera_frame is None:
         return None
-    payload_center_in_camera_frame, _ = detection
     payload_center_in_drone_frame = get_payload_center_in_drone_frame(payload_center_in_camera_frame, geom=geom)
     payload_center_in_inertial_frame = get_payload_center_in_inertial_frame(payload_center_in_drone_frame, drone_position_attitude)
 
@@ -115,7 +134,8 @@ def get_payload_ENU_from_data(payload_pose_file, flight_data, time_offset=0,
             continue
 
         out.iloc[i, 0:3] = payload_enu
-        out.iloc[i, 3] = frame["marker_id"].notna().sum()
+        out.iloc[i, 3] = (frame["marker_id"].notna().sum()
+                          if "marker_id" in frame.columns else 1)
         out.iloc[i, 4] = cam_time
 
     return out

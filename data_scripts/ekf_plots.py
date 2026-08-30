@@ -29,7 +29,8 @@ import sim.transformations as tf
 from sim.plotting import TimeSlider, configure_plot_style, C_REF, C_PAYLOAD
 import catalog
 import drone_plot
-from run_on_log import build_inputs, group_frames, make_ekf, run_full
+from run_on_log import (build_inputs, group_circles, group_frames,
+                        make_ekf, run_full)
 
 configure_plot_style()   # shared serif / Computer Modern theme
 
@@ -58,19 +59,22 @@ MIN_DEPTH_M = 0.1
 LEAD_S = 1.0
 
 
-def direct_measurement(frames, inp, offset, geom=None):
+def direct_measurement(frames, inp, offset, geom=None,
+                       source=ekfm.SOURCE_ARUCO):
     """
-    Per-frame swing angles straight from the PnP chain, no filtering.
+    Per-frame swing angles straight from the tracker, no filtering.
     This is the orange scatter the EKF gets compared against. It is not
-    truth -- it carries the same attitude error plus PnP depth noise.
+    truth -- it carries the same attitude error plus the tracker's own noise.
 
     The same pre-processing the filter is fed, so the two are exactly
-    comparable.
+    comparable. A color ring measures no payload yaw, so psi_p comes back 0.
     """
     geom = pp.DEFAULT_GEOMETRY if geom is None else geom
+    angles = (pp.swing_angles_from_circle if source == ekfm.SOURCE_COLOR
+              else pp.swing_angles)
     t_fl = inp["t"]
     rows = []
-    for t_cam, g, det in frames:
+    for t_cam, _, g, n_det in frames:
         t = t_cam - offset
         if t < t_fl[0] or t > t_fl[-1]:
             continue
@@ -78,10 +82,10 @@ def direct_measurement(frames, inp, offset, geom=None):
         theta = np.interp(t, t_fl, inp["theta"])
         psi = np.interp(t, t_fl, inp["psi"])
         S = tf.T_ENU_from_NED()
-        m = pp.swing_angles(g, S @ tf.T_IB(phi, theta, psi) @ S, geom=geom)
+        m = angles(g, S @ tf.T_IB(phi, theta, psi) @ S, geom=geom)
         if m is None:
             continue
-        rows.append((t_cam, *m, len(det)))
+        rows.append((t_cam, *m, n_det))
     return pd.DataFrame(rows, columns=["t_cam", "alpha_x", "alpha_y",
                                        "psi_p", "n"])
 
@@ -97,7 +101,7 @@ def estimated_payload_enu(records, fl, L_m):
     E = np.interp(t_flight, t, fl.drone_px_meas.to_numpy())
     N = np.interp(t_flight, t, fl.drone_py_meas.to_numpy())
     U = np.interp(t_flight, t, fl.drone_pz_meas.to_numpy())
-    q = np.array([r["q_I"] for r in records])
+    q = np.array([r["q_I"] for r in records]).reshape(-1, 3)
     return t_flight, np.c_[E, N, U] + L_m * q
 
 
@@ -170,17 +174,15 @@ def analyze(session, verbose=True):
     """
     if not session.has_camera:
         raise SystemExit(f"session {session.id} has no camera data")
-    if session.tracker == "color":
-        raise SystemExit(
-            f"session {session.id} was tracked with a color ring, and the "
-            f"post-hoc filter reads marker poses. Its circles.csv holds the "
-            f"ring center in x,y,z, so a color replay is possible but is not "
-            f"written yet. Drop --post to draw the states the run logged.")
+
+    color = session.tracker == "color"
+    source = ekfm.SOURCE_COLOR if color else ekfm.SOURCE_ARUCO
 
     geom = pp.Geometry.from_snapshot(session.config)
     offset = session.pose_offset
     inp = build_inputs(session.fl)
-    frames = group_frames(session.poses)
+    frames = (group_circles(session.poses) if color
+              else group_frames(session.poses))
 
     # L as well as geom: the pendulum frequency is the session's, not whatever
     # airframe Prm/config.py happens to be set to today
@@ -188,9 +190,16 @@ def analyze(session, verbose=True):
     records = run_full(frames, inp, offset, geom=geom,
                        hold=held_at(windows),
                        L=session.config["TETHER_LEN"],
-                       source=ekfm.SOURCE_ARUCO,
+                       source=source,
                        **ekf_tuning(session.config))
-    meas_df = direct_measurement(frames, inp, offset, geom=geom)
+    if not records:
+        raise SystemExit(
+            f"session {session.id} has {len(frames)} camera frames but the "
+            f"{source} tracker detected nothing in any of them, so the filter "
+            f"never seeded. Check EKF_SOURCE matches the marker that was "
+            f"actually flown.")
+
+    meas_df = direct_measurement(frames, inp, offset, geom=geom, source=source)
     if verbose:
         print(f"pose clock -> flight clock: {offset:+.3f} s")
         print(f"{len(records)} filter steps, "
@@ -600,19 +609,34 @@ def _config_summary_lines(cfg):
         v = cfg.get(key)
         text = fmt.format(np.degrees(v)) if v is not None else "n/a"
         return text
+    controller = cfg.get("CONTROLLER", "n/a")
     lines = [
         f"airframe {cfg.get('AIRFRAME', 'n/a')}",
-        f"controller {cfg.get('CONTROLLER', 'n/a')}",
+        f"controller {controller}",
         f"tether {g('TETHER_LEN')} m",
         f"drone mass {g('MASS_DRONE')} kg",
         f"payload mass {g('MASS_PAYLOAD')} kg",
         f"LQR w_xy={g('LQR_PAYLOAD_W_POS_XY', '{:.3f}')} "
         f"w_z={g('LQR_PAYLOAD_W_POS_Z', '{:.3f}')} "
         f"tune={g('LQR_PAYLOAD_TUNING_CONST', '{:.3f}')}",
-        f"EKF sig_xy={deg('EKF_SIGMA_XY')} deg "
-        f"sig_yaw={deg('EKF_SIGMA_YAW', '{:.0f}')} deg "
-        f"q_xy={g('EKF_Q_XY', '{:.4f}')}",
     ]
+
+    # the integral costs the run flew, from whichever LQI it was. Both loops
+    # log both sets, so the controller name picks which one was live
+    if controller.endswith("LQI"):
+        if "Payload" in controller:
+            xy, z = "LQI_PAYLOAD_W_INT_XY", "LQI_PAYLOAD_W_INT_Z"
+            band, cap = "LQI_PAYLOAD_E_BAND", "LQI_PAYLOAD_U_I_MAX"
+        else:
+            xy, z = "LQI_DRONE_Q_INT_XY", "LQI_DRONE_Q_INT_Z"
+            band, cap = "LQI_DRONE_E_BAND", "LQI_DRONE_U_I_MAX"
+        lines.append(f"LQI int_xy={g(xy, '{:.4f}')} int_z={g(z, '{:.4f}')}")
+        lines.append(f"band={g(band)} m  u_i_max={g(cap)} m/s^2")
+
+    lines.append(f"EKF sig_xy={deg('EKF_SIGMA_XY')} deg "
+                 f"sig_yaw={deg('EKF_SIGMA_YAW', '{:.0f}')} deg "
+                 f"q_xy={g('EKF_Q_XY', '{:.4f}')}")
+
     return lines
 
 
@@ -750,24 +774,6 @@ def drone_states(fl, records):
             cols("drone_vx_meas", "drone_vy_meas", "drone_vz_meas"))
 
 
-def body_rates(fl, records):
-    """
-    Body angular rate at each record's flight time, ENU ordered, Nx3 [rad/s].
-
-    RAW_IMU logs the gyro in mrad/s about FRD, so it is scaled and swapped
-    into the same body ENU the overlay's T_IB is built on.
-    """
-    t = fl.cur_time.to_numpy()
-    at = [r["t_flight"] for r in records]
-
-    w_frd = np.column_stack([np.interp(at, t, fl[c].to_numpy(float))/1000
-                             for c in ("drone_gyrox_meas", "drone_gyroy_meas",
-                                       "drone_gyroz_meas")])
-
-    w_B = w_frd @ tf.T_ENU_from_NED().T
-
-    return w_B
-
 
 def payload_enu(r, p_drone, filt):
     """Where the filter puts the payload: a tether below the drone, leaned
@@ -776,26 +782,19 @@ def payload_enu(r, p_drone, filt):
                                       r["xi"][ekfm.IX_ALPHA_Y], -1])
 
 
-def velocity_tip_px(r, p_drone, w_B, filt, K, D, lead_s=LEAD_S):
+def velocity_tip_px(r, p_drone, filt, K, D, lead_s=LEAD_S):
     """Where the payload is headed, in pixels: the tip of the velocity arrow.
 
-    The payload's velocity in the camera frame, which is the motion the
-    picture actually shows. The camera rides the drone, so the drone's own
-    travel drops out and the swing is left,
+    The payload's swing velocity, relative to the drone the camera rides on,
 
         v_rel_I = L*[alphadot_x, alphadot_y, 0]
 
-    but the camera also turns with the drone, and a turning camera sweeps the
-    payload across the frame with no swing at all. That is the transport term,
-    taken off in the body frame where the rate is measured,
-
-        v_seen = v_rel - w x d,   d = drone to payload
-
-    On a long tether it is the larger half: at 7.5 m a 0.09 rad/s body rate
-    already outruns a typical swing. A payload flying level with the drone,
-    on a drone holding its attitude, sits still in frame and carries no arrow.
-    The ENU velocity the controller is judged on is the payload velocity plot
-    instead.
+    so a payload flying level with the drone carries no arrow. The camera also
+    turns with the drone, and adding that transport term makes the arrow the
+    apparent motion in the picture, which is the honest answer to a different
+    question: on the 0828 stick run it swung the arrow 6x more between frames
+    and agreed less with where the payload was actually going. The swing is
+    what this overlay is read for, so the rotation is left out.
 
     The tip is the payload's own position carried `lead_s` along that velocity
     and projected like any other point, so the arrow reads as a length rather
@@ -804,18 +803,11 @@ def velocity_tip_px(r, p_drone, w_B, filt, K, D, lead_s=LEAD_S):
     prediction -- the tether is a 6.3 s pendulum, so a second of swing turns
     through a sixth of a cycle and the payload never reaches the tip.
     """
-    T_IB = r["T_IB"]
     v_rel_I = filt.L*np.array([r["xi"][ekfm.IX_ALPHA_DOT_X],
                                r["xi"][ekfm.IX_ALPHA_DOT_Y], 0])
+    ahead = payload_enu(r, p_drone, filt) + lead_s*v_rel_I
 
-    # drone to payload, carried into the body frame the gyro measures in
-    d_I = filt.L*np.array([r["xi"][ekfm.IX_ALPHA_X],
-                           r["xi"][ekfm.IX_ALPHA_Y], -1])
-    v_rot_I = T_IB @ np.cross(w_B, T_IB.T @ d_I)
-
-    ahead = payload_enu(r, p_drone, filt) + lead_s*(v_rel_I - v_rot_I)
-
-    tip = project_enu(ahead, p_drone, T_IB, filt, K, D)[0]
+    tip = project_enu(ahead, p_drone, r["T_IB"], filt, K, D)[0]
 
     return tip
 
@@ -849,8 +841,10 @@ def reference_pixels(session, records, filt, K, D, stride=5, truncate=False):
     wherever the pilot moves the stick next, so drawing the whole track like
     a planned flight would show a path that was never really there.
 
-    The error is the straight-line distance in ENU from that sample to where
-    the filter puts the payload, measured in the world rather than off the
+    The error is the horizontal distance in ENU from that sample to where the
+    filter puts the payload. Horizontal because the payload hangs a fixed
+    tether below the drone, so the vertical part is altitude rather than
+    anything the swing did. Measured in the world rather than off the
     picture: two points the same distance apart look closer together the
     further from the lens axis they sit, so pixels would not be a length.
     """
@@ -876,7 +870,7 @@ def reference_pixels(session, records, filt, K, D, stride=5, truncate=False):
             path = path_full
         uv = project_enu(np.vstack([path, here]), p_drone[k], r["T_IB"],
                          filt, K, D)
-        gap = np.linalg.norm(payload_enu(r, p_drone[k], filt) - here)
+        gap = np.linalg.norm((payload_enu(r, p_drone[k], filt) - here)[0:2])
         out[r["frame"]] = (_runs(uv[:-1]), uv[-1], float(gap))
     return out
 
@@ -894,7 +888,7 @@ def overlay_video(session, records, save=None):
     red -- the whole track as a line, the sample being chased now as a dot --
     so the estimate can be read against what it was supposed to be. A blue
     line closes the gap between the two, labelled with how far apart they are
-    in metres. Frames the filter never reached are copied through untouched.
+    horizontally in metres. Frames the filter never reached are copied through untouched.
 
     The geometry used to project the estimate into pixels comes from the
     session's own config_snapshot.json (session.config), not the live
@@ -934,7 +928,6 @@ def overlay_video(session, records, save=None):
                     source=ekfm.SOURCE_ARUCO,
                     L=session.config.get("TETHER_LEN"))
     p_drone, _ = drone_states(session.fl, records)
-    w_B = body_rates(session.fl, records)
     meas_by_frame = {r["frame"]: r["n"] for r in records}
     drawn = {}
     for k, r in enumerate(records):
@@ -944,7 +937,7 @@ def overlay_video(session, records, save=None):
         # a payload swung out of the camera's half-space projects nowhere
         if np.isfinite(center).all():
             drawn[r["frame"]] = (center,
-                                 velocity_tip_px(r, p_drone[k], w_B[k], filt, K, D),
+                                 velocity_tip_px(r, p_drone[k], filt, K, D),
                                  plumb_px(p_drone[k], r["T_IB"], filt, K, D))
     ref = reference_pixels(session, records, filt, K, D,
                            truncate="stick" in session.label.lower())
@@ -1055,14 +1048,13 @@ def overlay_compare_video(session, records_reg, records_post, save=None):
 
     def project(records):
         p_drone, _ = drone_states(session.fl, records)
-        w_B = body_rates(session.fl, records)
         drawn = {}
         for k, r in enumerate(records):
             P = np.zeros((ekfm.STATE_DIM, ekfm.STATE_DIM))
             center, _, _ = filt.estimate_to_px_coords(r["xi"], P, r["T_IB"], K, D)
             if np.isfinite(center).all():
                 drawn[r["frame"]] = (center,
-                                     velocity_tip_px(r, p_drone[k], w_B[k], filt, K, D),
+                                     velocity_tip_px(r, p_drone[k], filt, K, D),
                                      plumb_px(p_drone[k], r["T_IB"], filt, K, D))
         return drawn
 

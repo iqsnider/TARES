@@ -281,19 +281,14 @@ class ColorCircleRecorder:
 
     def annotate(self, frame, det):
         """
-        Draw the fitted circle and its center, with range and arc coverage
+        Draw the fitted circle and its center. Range and arc coverage are in
+        the csv, so the picture stays clear enough to see the ring itself
         """
         c = (int(round(det["u"])), int(round(det["v"])))
         cv2.circle(frame, c, int(round(det["radius"])), (60, 255, 80), 2,
                    cv2.LINE_AA)
         cv2.drawMarker(frame, c, (60, 255, 80), cv2.MARKER_CROSS, 40, 2,
                        cv2.LINE_AA)
-        text = f"{det['range_m']:.2f} m  {det['coverage']:.0f} deg"
-        at = (c[0] + 24, c[1] - 16)
-        cv2.putText(frame, text, at, cv2.FONT_HERSHEY_SIMPLEX, 1.1,
-                    (0, 0, 0), 6, cv2.LINE_AA)
-        cv2.putText(frame, text, at, cv2.FONT_HERSHEY_SIMPLEX, 1.1,
-                    (60, 255, 80), 2, cv2.LINE_AA)
 
     def _set_camera_controls(self, camera_index):
         """

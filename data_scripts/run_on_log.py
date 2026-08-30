@@ -29,10 +29,41 @@ def group_frames(pose):
     Groups marker ids together with a timestamp for all frames in the pose file
     """
     out = []
-    for _, g in pose.groupby('frame'):
-        out.append((float(g.time_s.iloc[0]), g, g.dropna(subset=['marker_id'])))
+    for fno, g in pose.groupby('frame'):
+        det = g.dropna(subset=['marker_id'])
+        out.append((float(g.time_s.iloc[0]), int(fno), g, len(det)))
 
     return out
+
+
+def group_circles(circles):
+    """
+    One ring center per frame from a color tracker's circles.csv.
+
+    Shaped like group_frames: the payload is the ring center in the camera
+    frame, or None on a frame that saw nothing, and the count is 1 or 0.
+    """
+    out = []
+    for fno, g in circles.groupby('frame'):
+        row = g.iloc[0]
+        seen = bool(np.isfinite(row.get('u_px', np.nan)))
+        p_C = np.array([row.x, row.y, row.z], float) if seen else None
+        out.append((float(row.time_s), int(fno), p_C, int(seen)))
+
+    return out
+
+
+def _seed_and_measure(source, geom):
+    """
+    The two things the replay needs from whichever tracker wrote the file:
+    initial swing angles, and a measurement vector per frame.
+    """
+    if source == ekfm.SOURCE_COLOR:
+        return (lambda payload, T_IB: pp.swing_angles_from_circle(payload, T_IB, geom=geom),
+                lambda payload, T_IB: pp.measurement_from_circle(payload, geom=geom))
+
+    return (lambda payload, T_IB: pp.swing_angles(payload, T_IB, geom=geom),
+            lambda payload, T_IB: pp.measurement(payload, T_IB, geom=geom))
 
 
 def make_ekf(phi, theta, psi, alpha_x, alpha_y, psi_p, **kwargs):
@@ -58,12 +89,14 @@ def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
     replay exercises the prediction over the same blackouts the test did.
     """
     geom = pp.DEFAULT_GEOMETRY if geom is None else geom
+    source = ekf_kwargs.get("source", ekfm.SOURCE_ARUCO)
+    seed_of, z_of = _seed_and_measure(source, geom)
     t_fl = inp["t"]
     S = tf.T_ENU_from_NED()
     filt = None
     t_prev = None
     out = []
-    for t_cam, frame, det in frames:
+    for t_cam, frame_no, frame, n_det in frames:
         t = t_cam - offset
 
         phi = np.interp(t, t_fl, inp["phi"])
@@ -74,12 +107,12 @@ def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
         # a held frame reaches the filter as nothing, the way an occluded one does
         held = hold is not None and hold(t)
         seen = None if held else frame
+        T_IB = S @ tf.T_IB(phi, theta, psi) @ S
 
         if filt is None:
             if held:
                 continue
-            T_IB = S @ tf.T_IB(phi, theta, psi) @ S
-            init_ekf = pp.swing_angles(frame, T_IB, geom=geom)
+            init_ekf = seed_of(frame, T_IB)
 
             if init_ekf is None:
                 continue
@@ -92,10 +125,19 @@ def run_full(frames, inp, offset, geom=None, hold=None, **ekf_kwargs):
 
         dt = t_cam - t_prev
         t_prev = t_cam
-        xi, P = filt(seen, a_I, dt, phi, theta, psi)
 
-        out.append(dict(t_cam=t_cam, t_flight=t, n=0 if held else len(det),
-                        frame=int(frame.frame.iloc[0]),
+        # predict, then fold in whatever this tracker saw. Spelled out rather
+        # than calling the filter, since only the marker path can read a frame
+        filt.T_IB = T_IB
+        xi, P = filt.ekf_predict(filt.xi, filt.P, a_I, dt)
+        if seen is not None:
+            z = z_of(seen, T_IB)
+            if z is not None:
+                xi, P = filt.update_with_z(xi, P, z, T_IB)
+        filt.xi, filt.P = xi, P
+
+        out.append(dict(t_cam=t_cam, t_flight=t, n=0 if held else n_det,
+                        frame=frame_no,
                         xi=xi.copy(), P=P.copy(), T_IB=filt.T_IB.copy(),
                         alpha_x=xi[ekfm.IX_ALPHA_X],
                         alpha_y=xi[ekfm.IX_ALPHA_Y],
