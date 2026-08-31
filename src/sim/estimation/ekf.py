@@ -160,9 +160,7 @@ class EKF:
 
     def measurement_prediction(self, xi, T_BI):
         """
-        Predicted measurement h and Jacobian H for one camera frame. Both are
-        cut to the tracker's width, so a color source drops the yaw row it
-        cannot measure.
+        Predicted measurement h and Jacobian H for one camera frame. Both are cut to the tracker's width, so a color source drops the yaw row it cannot measure.
         """
         alpha_x, alpha_y, _, _, psi_p = xi
         A = self.T_CB @ T_BI

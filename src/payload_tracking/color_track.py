@@ -22,17 +22,17 @@ _DEFAULT_CALIB = os.path.join(_HERE, "camera_calibration/calibration.json")
 class ColorCircleRecorder:
     def __init__(self,
                  calibration_path=_DEFAULT_CALIB,
-                 circle_diameter_m=0.3,        # outer diameter of the ring
-                 band_m=0.03,                  # width of the colored band
-                 hue=110,                      # 0-179, OpenCV's half-degree hue
+                 circle_diameter=0.3,  # outer diameter of the ring
+                 band=0.03,  # width of the colored band
+                 hue=110,  # 0-179
                  hue_width=15,
                  sat_min=90,
                  val_min=50,
                  min_area_px=150,
-                 min_coverage_deg=200,         # how far the color must wrap
-                 expected_range_m=None,        # the tether length, if known
-                 range_tol=0.35,               # how far the ring may be off it
-                 morph_px=3,                   # gap-closing kernel
+                 min_coverage_deg=200,  # the minimum angle that the blob must cover
+                 expected_range=None,  # the tether length, if known
+                 range_tol=0.35,  # tolerance around the tether length [m]
+                 morph_px=3,  # kernel for closing the gap
                  video_out="recording.avi",
                  csv_out="circles.csv",
                  capture_fps=48,
@@ -40,7 +40,7 @@ class ColorCircleRecorder:
                  width=2304,
                  height=1536,
                  pixel_format="MJPG",
-                 exposure_abs=2,               # units of 100us; 2 = 0.2 ms
+                 exposure_abs=2,  # units of 100 microseconds
                  gain=1,
                  print_every=30,
                  write_queue_size=16,
@@ -48,20 +48,20 @@ class ColorCircleRecorder:
                  preview_fps=12,
                  preview_width=960,
                  preview_quality=60):
-        self.circle_diameter_m = circle_diameter_m
-        self.band_m = band_m
+        self.circle_diameter = circle_diameter
+        self.band = band
         self.hue = int(hue)
         self.hue_width = int(hue_width)
         self.sat_min = int(sat_min)
         self.val_min = int(val_min)
         self.min_area_px = min_area_px
         self.min_coverage_deg = min_coverage_deg
-        self.expected_range_m = expected_range_m
+        self.expected_range = expected_range
         self.range_tol = range_tol
 
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
-        self.print_every = print_every            # 0 = silent per-frame
+        self.print_every = print_every
         self.write_queue_size = write_queue_size
 
         self.width = width
@@ -71,8 +71,6 @@ class ColorCircleRecorder:
         self.frame_stride = max(1, int(frame_stride))
         self.fps = capture_fps / self.frame_stride
 
-        # auto exposure drifts the color balance, so a hue threshold set in one
-        # light will not hold in another
         self.exposure_abs = exposure_abs
         self.gain = gain
 
@@ -84,6 +82,8 @@ class ColorCircleRecorder:
 
         with open(os.path.expanduser(calibration_path)) as f:
             calib = json.load(f)
+
+        # camera calibration information
         self.mtx = np.array(calib["mtx"], dtype=np.float64)
         self.dist = np.array(calib["dist"], dtype=np.float64)
         self.focal_px = 0.5*(self.mtx[0, 0] + self.mtx[1, 1])
@@ -99,7 +99,7 @@ class ColorCircleRecorder:
         self.csv_writer = None
         self.frame_idx = 0
         self._t0 = None
-        # recent frame times, for a live rate rather than the average so far
+        # recent frame times for display and debugging
         self._frame_times = deque(maxlen=64)
         # (frame_idx, detection) for the control loop
         self._latest = (-1, None)
@@ -110,25 +110,24 @@ class ColorCircleRecorder:
 
     def color_mask(self, frame):
         """
-        Pixels within the hue band, cleaned up
+        Generates a stencil from the image with the pixels of interest.
+        Checks if the hue band crosses the HSV 0.
+        Applies a morphological transformation to the mask in an attempt to close any gaps between ring arcs.
         """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lo = (self.hue - self.hue_width) % 180
-        hi = (self.hue + self.hue_width) % 180
+        lo_hue = (self.hue - self.hue_width) % 180
+        hi_hue = (self.hue + self.hue_width) % 180
 
-        if lo <= hi:
-            mask = cv2.inRange(hsv, (lo, self.sat_min, self.val_min),
-                               (hi, 255, 255))
+        if lo_hue <= hi_hue:
+            mask = cv2.inRange(
+                hsv, (lo_hue, self.sat_min, self.val_min), (hi_hue, 255, 255))
         else:
-            # the band runs past 0, the way red does
-            mask = cv2.inRange(hsv, (0, self.sat_min, self.val_min),
-                               (hi, 255, 255))
-            mask |= cv2.inRange(hsv, (lo, self.sat_min, self.val_min),
-                                (179, 255, 255))
+            mask = cv2.inRange(
+                hsv, (0, self.sat_min, self.val_min), (hi_hue, 255, 255))
+            mask |= cv2.inRange(
+                hsv, (lo_hue, self.sat_min, self.val_min), (179, 255, 255))
 
-        # close only. An opening erodes a couple of pixels off every edge,
-        # which erases the band entirely at range: 0.03 m is 5 px thick at
-        # 8 m and 2 px at 20 m. Speckle is dropped by min_area_px instead.
+        # closes the mask
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
 
         return mask
@@ -136,11 +135,12 @@ class ColorCircleRecorder:
     @staticmethod
     def _coverage_deg(pts, cx, cy, bins=36):
         """
-        How far the points wrap around the center, in degrees. A blob that is
-        only one piece of a cut ring sits off to one side, and its centroid is
-        nowhere near the ring's center, so this says whether to trust it.
+        Checks how far the detected points wrap around a circle.
         """
+        # the angle form teh fitted center
         ang = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx)
+
+        # checks which 10 degree wedges of the circle the arc landed in
         hit = np.zeros(bins, dtype=bool)
         hit[((ang + np.pi)/(2*np.pi)*bins).astype(int) % bins] = True
 
@@ -151,13 +151,30 @@ class ColorCircleRecorder:
     @staticmethod
     def _fit_circle(pts):
         """
-        Least-squares circle through points, minimizing algebraic distance.
+        Least-squares circle through points
+        Kasa method of circle fitting.
 
-        A centroid is the middle of whatever is visible, which on a ring the
-        tether has cut is out on the arc rather than at the center. Three
-        points still fix a circle, so the fit stays put as pieces go missing.
+        Basically,
+
+        (x -  cx)^2 + (y - cy)^2 = r^2
+
+        rearrange:
+
+        x^2 + y^2 = 2cx x + 2cy y + r^2 - cx^2 - cy^2
+
+        then, we use least-squares to solve for 2cx, 2cy, and r^2 - cx^2 - cy^2.
+        These are the coefficients of A = [x,y,1]
+
+        where Ax = b
+
+        Then, cx, cy, and r are trivially obtained from the resulting coefficients.
         """
-        x, y = pts[:, 0].astype(float), pts[:, 1].astype(float)
+
+        # x and y arrays of points and converts the findContours integers to floats for numpy
+        x = pts[:, 0].astype(float)
+        y = pts[:, 1].astype(float)
+
+        # sets up the algebraic solve
         A = np.column_stack([x, y, np.ones(len(x))])
         sol, *_ = np.linalg.lstsq(A, x*x + y*y, rcond=None)
 
@@ -169,113 +186,116 @@ class ColorCircleRecorder:
     @staticmethod
     def _edge_points(labels, stats, k):
         """
-        Boundary pixels of one component, both edges of the band.
-
-        Cropped to the component's own box, so the scan does not walk the
-        whole frame for every candidate.
+        Retuns the points that we are going to try and fit a circle to later.
         """
+        # gets the blob's bounding box
         x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
         w, h = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
 
+        # crops the search area to the blob bounding box for efficiency and only analyzes the points for the specific label map
         sub = (labels[y:y+h, x:x+w] == k).astype(np.uint8)
-        contours, _ = cv2.findContours(sub, cv2.RETR_LIST,
-                                       cv2.CHAIN_APPROX_NONE)
 
+        # gives the outer and inner edge contours of the annulus and keeps every boundary pixel for precision
+        contours, _ = cv2.findContours(
+            sub, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+        # puts the points back into the full space of the frame
         pts = np.vstack([c.reshape(-1, 2) for c in contours]) + (x, y)
 
         return pts
 
     def range_from_radius(self, r):
         """
-        Distance to the marker from the radius fitted to its band.
-
-        The fit sits between the band's edges, so it is the centerline that
-        sets the scale. Radius rather than pixel count: an occluded ring
-        covers fewer pixels but is no further away.
+        Distance to the marker from the radius fitted to its band
         """
-        range_m = self.focal_px*(self.circle_diameter_m - self.band_m)/(2*r)
+        rng = self.focal_px*(self.circle_diameter - self.band)/(2*r)
 
-        return range_m
+        return rng
 
-    def _range_expected(self, range_m):
+    def _range_expected(self, rng):
         """
-        Whether a range matches the tether length, if one is known.
-
-        The payload hangs one tether length from the camera whatever the drone
-        is doing, and a swing only shortens that by cos(alpha), so how much of
-        the sensor the marker fills is known before looking at the picture.
+        Whether a range matches the tether length
         """
-        if not self.expected_range_m:
+        if not self.expected_range:
             return True
 
-        off = abs(range_m - self.expected_range_m)
+        off = abs(rng - self.expected_range)
 
-        return off <= self.range_tol*self.expected_range_m
+        return off <= self.range_tol*self.expected_range
 
     def find_blob(self, mask):
         """
-        The biggest colored blob whose fitted circle sits at the right distance.
-
-        Connected components pick out which pixels are the marker, which is
-        what they are good at, and a circle fitted to that blob's edge says
-        where its center is, which a centroid gets wrong the moment the ring
-        is cut. Decoys elsewhere in the frame are dropped on range.
         """
+        # group the white pixels that are touching each other into blobs
         n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
 
+        # find the best blob
         best = None
+
         for k in range(1, n):
+
+            # discard every blob that does not meet a minimum px area
             area = int(stats[k, cv2.CC_STAT_AREA])
             if area < self.min_area_px:
                 continue
 
+            # get the edge poitns of the blob and try and fit a circle
             pts = self._edge_points(labels, stats, k)
             cx, cy, r = self._fit_circle(pts)
             if r <= 0:
                 continue
 
-            range_m = self.range_from_radius(r)
-            if not self._range_expected(range_m):
+            # gets the range from circle for debugging and validation
+            rng = self.range_from_radius(r)
+            if not self._range_expected(rng):
                 continue
 
+            # keeps the largest arc as the best blob
             if best is None or area > best[0]:
-                best = (area, cx, cy, r, range_m, pts)
+                best = (area, cx, cy, r, rng, pts)
 
+        # nothing detected, wait for next frame
         if best is None:
             return None
 
-        area, cx, cy, r, range_m, pts = best
+        area, cx, cy, r, rng, pts = best
 
-        # wrap is measured about the fitted center, not the centroid, so a
-        # lone arc reads as the partial thing it is
+        # get the arc length
         coverage = self._coverage_deg(pts, cx, cy)
 
-        return cx, cy, r, range_m, coverage, area
+        return cx, cy, r, rng, coverage, area
 
     def detect(self, frame):
         """
-        The marker's center and where it puts the payload in the camera frame.
-        None when nothing of that color is at the right distance, or when what
-        is found does not wrap far enough around the center it implies.
+        Finds the ring that we are trying to track
         """
+        # first make a stencil mask of the frame
         mask = self.color_mask(frame)
+
+        # find the blob that is best for measuring the payload's position
         blob = self.find_blob(mask)
+
         if blob is None:
             return None
-        cx, cy, radius, range_m, coverage, area = blob
 
+        cx, cy, radius, rng, coverage, area = blob
+
+        # check if the arc meets the minimum arc length requirement
         if coverage < self.min_coverage_deg:
             return None
 
-        # pixel to unit ray, lens distortion undone, then out to that range
-        xy = cv2.undistortPoints(np.array([[[cx, cy]]], dtype=np.float64),
-                                 self.mtx, self.dist).ravel()
+        # convert pixel coords to a unit vector
+        xy = cv2.undistortPoints(
+            np.array([[[cx, cy]]], dtype=np.float64), self.mtx, self.dist).ravel()
         ray = np.array([xy[0], xy[1], 1])
-        ray /= np.linalg.norm(ray)
-        p_C = range_m*ray
+        ray = ray/np.linalg.norm(ray)
 
+        # the payload measurement in the camera frame
+        p_C = rng*ray
+
+        # collect detection information into a dictionary
         det = dict(u=cx, v=cy, radius=radius, coverage=coverage,
-                   n_px=int(area), range_m=range_m, p_C=p_C)
+                   n_px=int(area), range_m=rng, p_C=p_C)
 
         return det
 
@@ -292,7 +312,7 @@ class ColorCircleRecorder:
 
     def _set_camera_controls(self, camera_index):
         """
-        Pin exposure and gain on the driver. Must run after the stream is live,
+        Find exposure and gain on the driver. Must run after the stream is live,
         since setting the format resets controls on many UVC drivers.
         """
         print(apply_camera_controls(
@@ -352,7 +372,8 @@ class ColorCircleRecorder:
             "".join(chr((cc >> 8 * i) & 0xFF) for i in range(4)),
             w, h, self.cap.get(cv2.CAP_PROP_FPS)))
         if self.frame_stride > 1:
-            print(f"stride {self.frame_stride} -> recording at {self.fps:g} fps")
+            print(
+                f"stride {self.frame_stride} -> recording at {self.fps:g} fps")
         assert (w, h) == (self.width, self.height), \
             f"requested {self.width}x{self.height}, got {w}x{h}; range wrong"
 

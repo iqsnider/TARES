@@ -52,10 +52,10 @@ def start_camera(marker_size_m, video_out, csv_out, marker_ids=None,
     return recorder, thread
 
 
-def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
+def start_color_camera(circle_diameter, band, video_out, csv_out,
                        hue, hue_width, sat_min, val_min,
                        min_area_px=150, min_coverage_deg=200,
-                       expected_range_m=None,
+                       expected_range=None,
                        capture_fps=48, frame_stride=1, camera_index=0,
                        ready_timeout=5, preview_port=None,
                        exposure_abs=2, gain=1,
@@ -69,8 +69,8 @@ def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
     os.makedirs(os.path.dirname(video_out) or ".", exist_ok=True)
 
     recorder = ColorCircleRecorder(
-        circle_diameter_m=circle_diameter_m,
-        band_m=band_m,
+        circle_diameter=circle_diameter,
+        band=band,
         width=width,
         height=height,
         hue=hue,
@@ -79,7 +79,7 @@ def start_color_camera(circle_diameter_m, band_m, video_out, csv_out,
         val_min=val_min,
         min_area_px=min_area_px,
         min_coverage_deg=min_coverage_deg,
-        expected_range_m=expected_range_m,
+        expected_range=expected_range,
         video_out=video_out,
         csv_out=csv_out,
         capture_fps=capture_fps,
@@ -117,8 +117,8 @@ def start_payload_camera(video_out, csv_out, camera_index=0):
     """
     if config.EKF_SOURCE == "color":
         return start_color_camera(
-            circle_diameter_m=config.CIRCLE_DIAMETER,
-            band_m=config.CIRCLE_BAND,
+            circle_diameter=config.CIRCLE_DIAMETER,
+            band=config.CIRCLE_BAND,
             video_out=video_out,
             csv_out=csv_out,
             hue=config.CIRCLE_HUE,
@@ -127,7 +127,7 @@ def start_payload_camera(video_out, csv_out, camera_index=0):
             val_min=config.CIRCLE_VAL_MIN,
             min_area_px=config.CIRCLE_MIN_AREA_PX,
             min_coverage_deg=config.CIRCLE_MIN_COVERAGE_DEG,
-            expected_range_m=config.TETHER_LEN,
+            expected_range=config.TETHER_LEN,
             capture_fps=config.CAM_FPS,
             frame_stride=config.CAM_STRIDE,
             camera_index=camera_index,

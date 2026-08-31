@@ -17,15 +17,15 @@ if __name__ == '__main__':
     circles_out = f"{data_dir}/circles.csv"
 
     recorder = ColorCircleRecorder(
-        circle_diameter_m=config.CIRCLE_DIAMETER,
-        band_m=config.CIRCLE_BAND,
+        circle_diameter=config.CIRCLE_DIAMETER,
+        band=config.CIRCLE_BAND,
         hue=config.CIRCLE_HUE,
         hue_width=config.CIRCLE_HUE_WIDTH,
         sat_min=config.CIRCLE_SAT_MIN,
         val_min=config.CIRCLE_VAL_MIN,
         min_area_px=config.CIRCLE_MIN_AREA_PX,
         min_coverage_deg=config.CIRCLE_MIN_COVERAGE_DEG,
-        expected_range_m=config.TETHER_LEN,
+        expected_range=config.TETHER_LEN,
         video_out=video_out,
         csv_out=circles_out,
         capture_fps=config.CAM_FPS,
