@@ -21,10 +21,10 @@ from datetime import datetime
 
 
 if __name__ == '__main__':
-    connection = "/dev/ttyACM0"
-    baud = 115200
-    # connection = "udp:127.0.0.1:14550"
-    # takeoff_altitude = 15
+    # connection = "/dev/ttyACM0"
+    # baud = 115200
+    connection = "udp:127.0.0.1:14550"
+    takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
@@ -38,34 +38,27 @@ if __name__ == '__main__':
         poses_out = f"{data_dir}/circles.csv"
 
     # add baud here if connected to real drone
-    m = comms.connect(connection, baud)
+    m = comms.connect(connection)
 
     # check for armability
-    # comms.wait_until_armable(m)
+    comms.wait_until_armable(m)
 
     # GUIDED mode is easiest for external commands
     comms.set_guid_options(m, 0)
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    # comms.arm(m)
+    comms.arm(m)
     #
     # # CLEAR THE AREA
-    # comms.takeoff(m, takeoff_altitude)
+    comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)
 
     # start camera first
-    recorder, cam_thread = cam.start_camera(
-        marker_size_m=config.MARKER_EDGE_LEN,
-        video_out=video_out,
-        csv_out=poses_out,
-        preview_port=config.CAM_PREVIEW_PORT,
-        capture_fps=config.CAM_FPS,
-        frame_stride=config.CAM_STRIDE,
-        gain=config.CAM_GAIN,
-        exposure_abs=config.CAM_EXP_ABS)
+    recorder, cam_thread = cam.start_payload_camera(video_out=video_out,
+                                                    csv_out=poses_out)
 
     controlLink = None
     try:

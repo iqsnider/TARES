@@ -13,7 +13,7 @@ GRAVITY = 9.81  # [m/s^2]
 # copied and edited. EKF_TEST is the bench rig: IF1200 numbers under its own
 # name, so a desk test is identifiable in the logs and can be retuned without
 # touching the aircraft
-AIRFRAME = "AURELIA_X4"  # or "IF1200", "EKF_TEST"
+AIRFRAME = "IF1200"  # or "AURELIA_X4", "IF1200", "EKF_TEST"
 
 _airframe_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "airframes")
@@ -72,8 +72,8 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 ##### camera tracking parameters #####
 
 # settings
-CAM_GAIN = 1
-CAM_EXP_ABS = _af["CAM_EXP_ABS"]
+CAM_GAIN = 20 # 1
+CAM_EXP_ABS = 185 # 3
 CAM_PREVIEW_PORT = 8080  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1

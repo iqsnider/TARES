@@ -459,13 +459,12 @@ class ControlComms:
         # set when the pilot takes the aircraft back, so the caller knows the
         # vehicle is no longer ours to command on the way out
         self.pilot_override = False
-        self.set_speed(speed)
 
         # one relative ENU hop per side, walked in order
-        corners = [np.array([edge_length, 0, 0], dtype=float),
-                   np.array([0, edge_length, 0], dtype=float),
-                   np.array([-edge_length, 0, 0], dtype=float),
-                   np.array([0, -edge_length, 0], dtype=float)]
+        corners = [np.array([0, -edge_length, 0], dtype=float), # South
+                   np.array([-edge_length, 0, 0], dtype=float), # West
+                   np.array([0, edge_length, 0], dtype=float), # North
+                   np.array([edge_length, 0, 0], dtype=float)] # East
 
         # intialize time for control loop
         t0 = time.time()
@@ -477,6 +476,8 @@ class ControlComms:
         for i, corner in enumerate(corners, start=1):
             p_ref = x[0:3] + corner
             mask = self.goto_offset_ned(S @ corner, yaw_ref)
+
+            self.set_speed(speed)
             self.logger.note_sent(bitmask=mask)
             print(f"flying leg {i}: {corner} m")
 

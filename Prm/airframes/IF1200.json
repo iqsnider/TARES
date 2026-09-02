@@ -11,7 +11,6 @@
   "MASS_TETHER": 0.9,
   "MASS_PAYLOAD": 5.65,
   "TETHER_LEN": 6.2,
-  "CAM_EXP_ABS": 2,
   "CAM_OFFSET_X": -0.1,
   "CAM_OFFSET_Y": -0.154,
   "CAM_OFFSET_Z": -0.1,
