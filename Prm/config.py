@@ -72,8 +72,8 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 ##### camera tracking parameters #####
 
 # settings
-CAM_GAIN = 20 # 1
-CAM_EXP_ABS = 185 # 3
+CAM_GAIN = 1  # 1
+CAM_EXP_ABS = 3  # 3
 CAM_PREVIEW_PORT = 8080  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1
@@ -166,6 +166,9 @@ LQI_DRONE_U_I_MAX = _af["LQI_DRONE_U_I_MAX"]
 LQR_PAYLOAD_W_POS_XY = (1/_af["LQR_PAYLOAD_W_POS_XY_TOL"])**2
 LQR_PAYLOAD_W_POS_Z = (1/_af["LQR_PAYLOAD_W_POS_Z_TOL"])**2
 LQR_PAYLOAD_TUNING_CONST = _af["LQR_PAYLOAD_TUNING_CONST"]
+# the lag state changes what the input cost buys, so the lag aware design
+# carries its own tuning constant rather than sharing the one above
+LQR_PAYLOAD_LAG_TUNING_CONST = _af["LQR_PAYLOAD_LAG_TUNING_CONST"]
 
 # payload outer loop with integral action (OuterLoopPayloadLQI)
 LQI_PAYLOAD_W_POS_XY = (1/_af["LQI_PAYLOAD_W_POS_XY_TOL"])**2
@@ -173,12 +176,20 @@ LQI_PAYLOAD_W_POS_Z = (1/_af["LQI_PAYLOAD_W_POS_Z_TOL"])**2
 LQI_PAYLOAD_W_INT_XY = (1/_af["LQI_PAYLOAD_W_INT_XY_TOL"])**2
 LQI_PAYLOAD_W_INT_Z = (1/_af["LQI_PAYLOAD_W_INT_Z_TOL"])**2
 LQI_PAYLOAD_TUNING_CONST = _af["LQI_PAYLOAD_TUNING_CONST"]
+LQI_PAYLOAD_LAG_TUNING_CONST = _af["LQI_PAYLOAD_LAG_TUNING_CONST"]
+
 # error norm [m] below which the integrator is allowed to accumulate
 LQI_PAYLOAD_E_BAND = _af["LQI_PAYLOAD_E_BAND"]
 # cap on the integral term's own contribution to u [m/s^2], so it cannot
 # run away even while accumulating. Sized per-airframe from each rig's own
 # commanded-acceleration logs (p95 of a clean closed-loop flight).
 LQI_PAYLOAD_U_I_MAX = _af["LQI_PAYLOAD_U_I_MAX"]
+
+##### airframe acceleration response (the WithLag controllers) #####
+
+# how long the airframe takes to deliver a commanded acceleration, a first
+# order lag fit to commanded against measured accel in flight [s]
+ACCEL_LAG_TAU = _af["ACCEL_LAG_TAU"]
 
 ##### payload swing EKF tuning (sim/estimation/ekf.py) #####
 

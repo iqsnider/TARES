@@ -21,7 +21,7 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_08282026/stick_test_{stamp}"
+    data_dir = f"data/test_09022026/stick_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":

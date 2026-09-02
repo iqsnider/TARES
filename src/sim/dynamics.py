@@ -247,6 +247,119 @@ class OuterLoopPayloadLQR:
         return np.linalg.inv(R) @ B.T @ P
 
 
+class OuterLoopPayloadLQRWithLag:
+    """
+    3x16 state gain + 3x3 lag gain, outputs acceleration
+
+    Same design as OuterLoopPayloadLQR with the airframe's acceleration lag in
+    the model, so the swing is driven by the acceleration that arrived rather
+    than the one that was asked for. The lag state is not measured, it is the
+    same first order model run forward on what was already sent.
+    """
+
+    def __init__(self,
+                 w_pos_xy=None, w_pos_z=None,
+                 tuning_const=None, tau=None
+                 ):
+        w_pos_xy = config.LQR_PAYLOAD_W_POS_XY if w_pos_xy is None else w_pos_xy
+        w_pos_z = config.LQR_PAYLOAD_W_POS_Z if w_pos_z is None else w_pos_z
+        tuning_const = (config.LQR_PAYLOAD_LAG_TUNING_CONST
+                        if tuning_const is None else tuning_const)
+        tau = config.ACCEL_LAG_TAU if tau is None else tau
+        L = config.TETHER_LEN
+        A, B = self._build_system(tau)
+
+        # outputs: payload position (x, y, z)
+        C = np.zeros((3, 13))
+        C[0, 0] = 1
+        C[0, 6] = L  # payload x = s1 + L*alpha_x
+
+        C[1, 1] = 1
+        C[1, 7] = L  # payload y = s2 + L*alpha_y
+
+        C[2, 2] = 1  # payload z = s3
+
+        W = np.diag([w_pos_xy, w_pos_xy, w_pos_z])
+        Q = C.T@W@C
+
+        # input cost for the order of [a1, a2, a3]
+        R = tuning_const*np.diag([1, 1, 1])
+        subK = self._lqr(A, B, Q, R)  # (3, 13)
+
+        self.K = np.zeros((3, 16))
+        # states used for designing the LQR controller
+        outerLoopStates = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
+        self.K[:, outerLoopStates] = subK[:, :10]
+        self.Ka = subK[:, 10:]              # (3, 3) on the accel still arriving
+        self.a_hat = np.zeros(3)
+        self.subK = subK
+        self.A = A
+        self.B = B
+        self.C = C
+        self.R = R
+        self.Q = Q
+        self.tau = tau
+
+    def compute_u(self, state_err):
+        dt = 1/config.CONTROL_FREQUENCY
+
+        u = -self.K @ state_err - self.Ka @ self.a_hat
+
+        # the airframe is still catching up to what was already sent, so run
+        # the lag forward on this command for the next tick to answer to
+        self.a_hat += (u - self.a_hat)*dt/self.tau
+
+        return u
+
+    def reset(self):
+        self.a_hat[:] = 0
+
+    @staticmethod
+    def _build_system(tau):
+        """
+        linearized 13-state about hover, the command reaching the airframe
+        through a first order lag.
+        state: [s1 s2 s3  v1 v2 v3  a1 a2  a1d a2d  ax ay az]
+        """
+        L = config.TETHER_LEN
+        g = config.GRAVITY
+        a = np.zeros((13, 13))
+        b = np.zeros((13, 3))
+        # position
+        a[0, 3] = 1
+        a[1, 4] = 1
+        a[2, 5] = 1
+        # translational kinematics, driven by the acceleration that arrived
+        a[3, 10] = 1
+        a[4, 11] = 1
+        a[5, 12] = 1
+        # pendulum kinematics and dynamics
+        a[6, 8] = 1
+        a[7, 9] = 1
+        a[8, 6] = -g/L
+        a[9, 7] = -g/L
+
+        a[8, 10] = -1/L
+        a[9, 11] = -1/L
+
+        # the airframe chases the command rather than meeting it
+        a[10, 10] = -1/tau
+        a[11, 11] = -1/tau
+        a[12, 12] = -1/tau
+
+        b[10, 0] = 1/tau
+        b[11, 1] = 1/tau
+        b[12, 2] = 1/tau
+
+        return a, b
+
+    @staticmethod
+    def _lqr(A, B, Q, R):
+        """Returns LQR gain"""
+        P = solve_continuous_are(A, B, Q, R)
+        return np.linalg.inv(R) @ B.T @ P
+
+
 class OuterLoopPayloadLQI:
     """
     3x16 state gain + 3x3 integral gain, outputs acceleration
@@ -350,6 +463,142 @@ class OuterLoopPayloadLQI:
 
         b[8, 0] = -1/L
         b[9, 1] = -1/L
+
+        return a, b
+
+    @staticmethod
+    def _lqr(A, B, Q, R):
+        """Returns LQR gain"""
+        P = solve_continuous_are(A, B, Q, R)
+        return np.linalg.inv(R) @ B.T @ P
+
+
+class OuterLoopPayloadLQIWithLag:
+    """
+    3x16 state gain + 3x3 integral gain + 3x3 lag gain, outputs acceleration
+    """
+    OUTER_STATES = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
+
+    def __init__(self,
+                 w_pos_xy=None, w_pos_z=None,
+                 w_int_xy=None, w_int_z=None,
+                 tuning_const=None,
+                 e_band=None, u_i_max=None, tau=None):
+        w_pos_xy = config.LQI_PAYLOAD_W_POS_XY if w_pos_xy is None else w_pos_xy
+        w_pos_z = config.LQI_PAYLOAD_W_POS_Z if w_pos_z is None else w_pos_z
+        w_int_xy = config.LQI_PAYLOAD_W_INT_XY if w_int_xy is None else w_int_xy
+        w_int_z = config.LQI_PAYLOAD_W_INT_Z if w_int_z is None else w_int_z
+        tuning_const = (config.LQI_PAYLOAD_LAG_TUNING_CONST
+                        if tuning_const is None else tuning_const)
+        e_band = config.LQI_PAYLOAD_E_BAND if e_band is None else e_band
+        u_i_max = config.LQI_PAYLOAD_U_I_MAX if u_i_max is None else u_i_max
+        tau = config.ACCEL_LAG_TAU if tau is None else tau
+        L = config.TETHER_LEN
+        A, B = self._build_system(tau)
+
+        # payload position, off the states the drone and swing share
+        C = np.zeros((3, 13))
+        C[0, 0] = 1
+        C[0, 6] = L
+        C[1, 1] = 1
+        C[1, 7] = L
+        C[2, 2] = 1
+
+        # augment: xI_dot = C @ x
+        Abar = np.zeros((16, 16))
+        Abar[:13, :13] = A
+        Abar[13:, :13] = C
+        Bbar = np.zeros((16, 3))
+        Bbar[:13, :] = B
+
+        W = np.diag([w_pos_xy, w_pos_xy, w_pos_z])
+        Wi = np.diag([w_int_xy, w_int_xy, w_int_z])
+        Q = np.zeros((16, 16))
+        Q[:13, :13] = C.T@W@C
+        Q[13:, 13:] = Wi
+        R = tuning_const*np.diag([1, 1, 1])
+
+        Kbar = self._lqr(Abar, Bbar, Q, R)  # (3, 16)
+        self.C = C[:, :10]                  # the lag states carry no output
+        self.K = np.zeros((3, 16))
+        self.K[:, self.OUTER_STATES] = Kbar[:, :10]
+        # (3, 3) on the accel still arriving
+        self.Ka = Kbar[:, 10:13]
+        self.Ki = Kbar[:, 13:]              # (3, 3)
+        self.xi = np.zeros(3)
+        self.a_hat = np.zeros(3)
+
+        # make accessible for analysis
+        self.Abar = Abar
+        self.Bbar = Bbar
+        self.Kbar = Kbar
+        self.Q = Q
+        self.R = R
+
+        self.e_band = e_band
+        self.u_i_max = u_i_max
+        self.tau = tau
+
+    def compute_u(self, state_err):
+        dt = 1/config.CONTROL_FREQUENCY
+
+        y_err = self.C @ state_err[self.OUTER_STATES]
+
+        # stop accumulating once error is too large, or once accumulating
+        # further would push the integral term's own contribution past its cap
+        if np.linalg.norm(y_err[:2]) < self.e_band:
+            xi_trial = self.xi + y_err*dt
+            if np.linalg.norm(self.Ki @ xi_trial) <= self.u_i_max:
+                self.xi = xi_trial
+
+        u = -self.K @ state_err - self.Ki @ self.xi - self.Ka @ self.a_hat
+
+        # the airframe is still catching up to what was already sent, so run
+        # the lag forward on this command for the next tick to answer to
+        self.a_hat += (u - self.a_hat)*dt/self.tau
+
+        return u
+
+    def reset(self):
+        self.xi[:] = 0
+        self.a_hat[:] = 0
+
+    @staticmethod
+    def _build_system(tau):
+        """
+        linearized 13-state about hover, the command reaching the airframe
+        through a first order lag.
+        state: [s1 s2 s3  v1 v2 v3  a1 a2  a1d a2d  ax ay az]
+        """
+        L = config.TETHER_LEN
+        g = config.GRAVITY
+        a = np.zeros((13, 13))
+        b = np.zeros((13, 3))
+        # position
+        a[0, 3] = 1
+        a[1, 4] = 1
+        a[2, 5] = 1
+        # translational kinematics, driven by the acceleration that arrived
+        a[3, 10] = 1
+        a[4, 11] = 1
+        a[5, 12] = 1
+        # pendulum kinematics and dynamics
+        a[6, 8] = 1
+        a[7, 9] = 1
+        a[8, 6] = -g/L
+        a[9, 7] = -g/L
+
+        a[8, 10] = -1/L
+        a[9, 11] = -1/L
+
+        # the airframe chases the command rather than meeting it
+        a[10, 10] = -1/tau
+        a[11, 11] = -1/tau
+        a[12, 12] = -1/tau
+
+        b[10, 0] = 1/tau
+        b[11, 1] = 1/tau
+        b[12, 2] = 1/tau
 
         return a, b
 
