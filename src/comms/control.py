@@ -30,6 +30,24 @@ ACCEL_ONLY_LOCK_YAW = (M.POSITION_TARGET_TYPEMASK_X_IGNORE
                        | M.POSITION_TARGET_TYPEMASK_VY_IGNORE
                        | M.POSITION_TARGET_TYPEMASK_VZ_IGNORE)
 
+# FOR PERFORMANCE EVAL ONLY
+POS_ONLY = (M.POSITION_TARGET_TYPEMASK_VX_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_VY_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_VZ_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_AX_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_AY_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_AZ_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_YAW_IGNORE
+            | M.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE)
+
+POS_ONLY_LOCK_YAW = (M.POSITION_TARGET_TYPEMASK_VX_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_VY_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_VZ_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_AX_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_AY_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_AZ_IGNORE
+                     | M.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE)
+
 
 def get_state_enu(ned, prev=None):
     """
@@ -418,6 +436,134 @@ class ControlComms:
             # time step
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
+
+    def fly_ardupilot_square(self, edge_length, hover_time, speed, recorder=None, ekf=None, tol=0.5):
+        """
+        Uses the position setpoints and the ardupilot controller. Using the position bitmask allows to evaluate custom controllers against the ardupilot baseline.
+        """
+        dt = 1/self.hz
+        S = tf.T_ENU_from_NED()
+        tether = np.array([0, 0, config.TETHER_LEN])
+
+        # get initial state
+        self._wait_fresh_state()
+        x = self.x0
+        yaw_ref = self.logger.cache['yaw']
+
+        # the loop time the filter last integrated to; None until the first
+        # pass, which has no elapsed time to measure and uses the nominal one
+        watching = ekf is not None and recorder is not None
+        t_prev = None
+        last_seq = -1
+
+        # set when the pilot takes the aircraft back, so the caller knows the
+        # vehicle is no longer ours to command on the way out
+        self.pilot_override = False
+        self.set_speed(speed)
+
+        # one relative ENU hop per side, walked in order
+        corners = [np.array([edge_length, 0, 0], dtype=float),
+                   np.array([0, edge_length, 0], dtype=float),
+                   np.array([-edge_length, 0, 0], dtype=float),
+                   np.array([0, -edge_length, 0], dtype=float)]
+
+        # intialize time for control loop
+        t0 = time.time()
+        next_t = t0
+        if self._t_flight0 is None:
+            self._t_flight0 = t0
+        leg_offset = t0 - self._t_flight0
+
+        for i, corner in enumerate(corners, start=1):
+            p_ref = x[0:3] + corner
+            mask = self.goto_offset_ned(S @ corner, yaw_ref)
+            self.logger.note_sent(bitmask=mask)
+            print(f"flying leg {i}: {corner} m")
+
+            # ardupilot sets its own pace, so the leg ends when the drone
+            # arrives rather than on a clock, and then holds for hover_time
+            arrived = None
+            while arrived is None or (time.time() - arrived) <= hover_time:
+                t = time.time() - t0
+                self.logger.pump(self.m)
+                c = self.logger.cache
+
+                # the pilot flipping out of GUIDED ends the test
+                if c['echoed_mode'] not in ("GUIDED", "?"):
+                    self.pilot_override = True
+                    print(f"pilot override: mode is {c['echoed_mode']}, "
+                          f"stopping at t={t:.1f}s")
+                    return
+
+                # get current state p,v
+                x = get_state_enu(c['ned'], prev=x)
+
+                if arrived is None and np.linalg.norm(p_ref - x[0:3]) < tol:
+                    arrived = time.time()
+                    print(f"leg {i} reached at t={t:.1f}s, holding "
+                          f"{hover_time}s")
+
+                payload = {}
+                if watching:
+                    # fold in the camera only when the frame is new
+                    seq, meas = est.latest_measurement(recorder, ekf.source)
+                    if seq == last_seq:
+                        meas = None
+                    else:
+                        last_seq = seq
+
+                    dt_ekf = dt if t_prev is None else t - t_prev
+                    t_prev = t
+
+                    xi, P = est.step_ekf(ekf, meas, est.accel_enu(c), dt_ekf,
+                                         c['roll'], c['pitch'], c['yaw'])
+
+                    payload = dict(payload_alpha=(xi[0], xi[1]),
+                                   payload_alphadot=(xi[2], xi[3]),
+                                   payload_psi_p=xi[ekfm.IX_PSI_P],
+                                   payload_innov=ekf.innov,
+                                   payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                                P[ekfm.IX_ALPHA_Y,
+                                                    ekfm.IX_ALPHA_Y],
+                                                P[ekfm.IX_ALPHA_X,
+                                                    ekfm.IX_ALPHA_Y],
+                                                P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
+
+                # log sent values, on the flight-wide clock rather than this
+                # leg's. u stays NaN: the acceleration is ardupilot's, not
+                # ours. The payload reference is the drone one hung a tether
+                # below, the same one the payload controller is scored on
+                self.logger.log(t + leg_offset, x, p_ref, yaw_ref=yaw_ref,
+                                payload_p_ref=p_ref - tether, **payload)
+
+                # time step
+                next_t += dt
+                time.sleep(max(0, next_t - time.time()))
+
+    # BASELINE ARDUPILOT COMMANDS FOR PERFORMANCE EVALUATION ONLY
+    def set_speed(self, speed):
+        """
+        Sets a constant speed for ardupilot
+        """
+        self.m.mav.command_long_send(
+            self.m.target_system, self.m.target_component,
+            M.MAV_CMD_DO_CHANGE_SPEED, 0,
+            1, speed, -1, 0, 0, 0, 0)
+
+    def goto_offset_ned(self, offset_ned, yaw):
+        """
+        Ardupilot, please go to a position #m from current position
+        """
+        mask = POS_ONLY_LOCK_YAW
+        self.m.mav.set_position_target_local_ned_send(
+            0, self.m.target_system, self.m.target_component,
+            M.MAV_FRAME_LOCAL_OFFSET_NED, mask,
+            offset_ned[0], offset_ned[1], offset_ned[2],
+            0, 0, 0,
+            0, 0, 0,
+            yaw, 0)
+
+        return mask
 
 
 # check math
