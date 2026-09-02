@@ -512,7 +512,7 @@ class ControlComms:
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
 
-    def fly_ardupilot_square(self, edge_length, hover_time, speed, recorder=None, ekf=None, tol=0.5):
+    def fly_ardupilot_square(self, edge_length, hover_time, speed, accel, recorder=None, ekf=None, tol=0.5):
         """
         Uses the position setpoints and the ardupilot controller. Using the position bitmask allows to evaluate custom controllers against the ardupilot baseline.
         """
@@ -534,6 +534,11 @@ class ControlComms:
         # set when the pilot takes the aircraft back, so the caller knows the
         # vehicle is no longer ours to command on the way out
         self.pilot_override = False
+
+        # WPNAV_ACCEL is what ardupilot ramps its position targets under, so
+        # this is the knob that matches its corners to the payload reference.
+        # A parameter, not runtime state, so once is enough
+        self.set_param("WPNAV_ACCEL", accel*100)
 
         # one relative ENU hop per side, walked in order
         corners = [np.array([0, -edge_length, 0], dtype=float), # South
@@ -617,6 +622,15 @@ class ControlComms:
                 time.sleep(max(0, next_t - time.time()))
 
     # BASELINE ARDUPILOT COMMANDS FOR PERFORMANCE EVALUATION ONLY
+    def set_param(self, name, value):
+        """
+        Writes one parameter on the flight controller. It sticks: the FC saves
+        it, so anything set here outlives the flight
+        """
+        self.m.mav.param_set_send(
+            self.m.target_system, self.m.target_component,
+            name.encode(), value, M.MAV_PARAM_TYPE_REAL32)
+
     def set_speed(self, speed):
         """
         Sets a constant speed for ardupilot

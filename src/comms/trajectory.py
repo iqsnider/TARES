@@ -56,11 +56,13 @@ class SafeFlightPlan:
                                  relativeEnd=True,
                                  logger=self.logger)
 
-    def payload_plan(self, p_payload_start):
+    def payload_plan(self, p_payload_start, accel=None):
         """
         The whole plan as one connected payload reference, built from where
         the payload starts. Each leg begins where the last one ended, so the
         legs join instead of re-anchoring on the drone every time.
+
+        Each leg ramps to self.speed at accel rather than stepping onto it.
         """
         legs = []
         p0 = np.asarray(p_payload_start, dtype=float)
@@ -72,9 +74,10 @@ class SafeFlightPlan:
             # last one. Hovering at both ends would sit two of them back to
             # back at each corner, holding twice as long there as anywhere else
             end_hover = self.wp_hover_time if key == keys[-1] else 0
-            legs.append(mission.ReferenceTrajectory(p0, p1, self.speed,
-                                                    self.wp_hover_time,
-                                                    end_hover))
+            legs.append(mission.RampedTrajectory(p0, p1, self.speed,
+                                                 self.wp_hover_time,
+                                                 end_hover,
+                                                 accel=accel))
             p0 = p1
 
         return legs

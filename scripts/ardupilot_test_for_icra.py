@@ -28,6 +28,11 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
+    # gentle enough that the ramp is not a step to a payload swinging on a
+    # 6 m tether, and the softest ardupilot documents for WPNAV_ACCEL, so the
+    # baseline and the payload run share it
+    accel = 0.5
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/pretest_09012026/ardupilot_icra_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
@@ -79,7 +84,7 @@ if __name__ == '__main__':
         # run the baseline: ardupilot flies every side of the square
         print("running ardupilot baseline...")
         controlLink.fly_ardupilot_square(edge_length, wp_hover_time, speed,
-                                         recorder=recorder, ekf=ekf)
+                                         accel, recorder=recorder, ekf=ekf)
     finally:
         try:
             if controlLink is None or not controlLink.pilot_override:

@@ -28,6 +28,10 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
+    # the ramp onto speed, matched to the WPNAV_ACCEL the ardupilot baseline
+    # flies so the two runs differ in the controller and nothing else
+    accel = 0.5
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09012026/payload_icra_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
@@ -86,7 +90,7 @@ if __name__ == '__main__':
                                       wp_hover_time=wp_hover_time,
                                       speed=speed,
                                       logger=logger)
-        legs = plan.payload_plan(controlLink.payload_position(ekf))
+        legs = plan.payload_plan(controlLink.payload_position(ekf), accel)
 
         # tell ardupilot not to help the external control system with the GUID_OPTION mode of 48
         comms.set_guid_options(m, 48)
