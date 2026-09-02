@@ -21,15 +21,15 @@ from datetime import datetime
 
 
 if __name__ == '__main__':
-    # connection = "/dev/ttyACM0"
-    # baud = 115200
-    connection = "udp:127.0.0.1:14550"
-    takeoff_altitude = 15
+    connection = "/dev/ttyACM0"
+    baud = 115200
+    # connection = "udp:127.0.0.1:14550"
+    # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
     speed = 1
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/pretest_09012026/ardupilot_survey_test_{stamp}"
+    data_dir = f"data/pretest_09012026/ardupilot_icra_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":
@@ -38,20 +38,20 @@ if __name__ == '__main__':
         poses_out = f"{data_dir}/circles.csv"
 
     # add baud here if connected to real drone
-    m = comms.connect(connection)
+    m = comms.connect(connection, baud)
 
     # check for armability
-    comms.wait_until_armable(m)
+    # comms.wait_until_armable(m)
 
     # GUIDED mode is easiest for external commands
     comms.set_guid_options(m, 0)
     comms.set_mode(m, "GUIDED")
 
     # arm the motors if not already armed
-    comms.arm(m)
+    # comms.arm(m)
     #
     # # CLEAR THE AREA
-    comms.takeoff(m, takeoff_altitude)
+    # comms.takeoff(m, takeoff_altitude)
 
     # intialize the logs
     logger = FlightLogger(data_dir=data_dir)

@@ -312,8 +312,21 @@ class ControlComms:
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
 
+    def payload_position(self, ekf):
+        """
+        Where the swing estimate puts the payload right now, in ENU.
+        """
+        self.logger.pump(self.m)
+        x = get_state_enu(self.logger.cache['ned'], prev=self.x0)
+        p = x[0:3] + config.TETHER_LEN*np.array([ekf.xi[ekfm.IX_ALPHA_X],
+                                                 ekf.xi[ekfm.IX_ALPHA_Y],
+                                                 -1])
+
+        return p
+
     def fly_payload_trajectory(self, ref, controller, duration, recorder, ekf,
-                               yaw_lock=True, yaw_ref=None, reassert=False):
+                               yaw_lock=True, yaw_ref=None, reassert=False,
+                               anchor=True):
         """
         Closed-loop payload reference tracking
         """
@@ -354,10 +367,15 @@ class ControlComms:
         last_seq, meas = est.latest_measurement(recorder, ekf.source)
         xi, _ = est.step_ekf(ekf, meas, est.accel_enu(c), dt,
                              c['roll'], c['pitch'], c['yaw'])
-        payload_now = x[0:3] + L*np.array([xi[0], xi[1], -1])
-        ref_offset = payload_now - ref(0)[0]
-        print(f"payload starts {np.linalg.norm(ref_offset[0:2]):.2f} m off the "
-              f"plumb point, shifting the reference to meet it")
+        if anchor:
+            payload_now = x[0:3] + L*np.array([xi[0], xi[1], -1])
+            ref_offset = payload_now - ref(0)[0]
+            print(f"payload starts {np.linalg.norm(ref_offset[0:2]):.2f} m off "
+                  f"the plumb point, shifting the reference to meet it")
+        else:
+            # a connected plan is already anchored on the payload and each leg
+            # starts where the last one ended, so shifting here breaks the join
+            ref_offset = np.zeros(3)
 
         # intialize time for control loop
         t0 = time.time()
@@ -424,6 +442,63 @@ class ControlComms:
                             yaw_ref=yaw_ref if yaw_ref is not None else 0,
                             payload_p_ref=p_ref,
                             payload_v_ref=v_ref,
+                            payload_alpha=(xi[0], xi[1]),
+                            payload_alphadot=(xi[2], xi[3]),
+                            payload_psi_p=xi[ekfm.IX_PSI_P],
+                            payload_innov=ekf.innov,
+                            payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
+                                         P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
+                                         P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
+
+            # time step
+            next_t += dt
+            time.sleep(max(0, next_t - time.time()))
+
+    def watch_payload(self, recorder, ekf):
+        """
+        Pump, filter and log with nothing commanded: the payload swing next to
+        the standard drone state, recorded until the script is interrupted.
+        """
+        dt = 1/self.hz
+
+        # get initial state
+        self._wait_fresh_state()
+        x = self.x0
+
+        # the loop time the filter last integrated to; None until the first
+        # pass, which has no elapsed time to measure and uses the nominal one
+        t_prev = None
+        last_seq = -1
+
+        # intialize time for the logging loop
+        t0 = time.time()
+        next_t = t0
+
+        while True:
+            t = time.time() - t0
+            self.logger.pump(self.m)
+            c = self.logger.cache
+
+            # get current state p,v
+            x = get_state_enu(c['ned'], prev=x)
+
+            # fold in the camera only when the frame is new
+            seq, meas = est.latest_measurement(recorder, ekf.source)
+            if seq == last_seq:
+                meas = None
+            else:
+                last_seq = seq
+
+            dt_ekf = dt if t_prev is None else t - t_prev
+            t_prev = t
+
+            # payload swing estimate: [alpha_x alpha_y alpha_dot_x alpha_dot_y psi_p]
+            xi, P = est.step_ekf(ekf, meas, est.accel_enu(c), dt_ekf,
+                                 c['roll'], c['pitch'], c['yaw'])
+
+            # reference and input stay NaN: this loop commands nothing
+            self.logger.log(t, x,
                             payload_alpha=(xi[0], xi[1]),
                             payload_alphadot=(xi[2], xi[3]),
                             payload_psi_p=xi[ekfm.IX_PSI_P],

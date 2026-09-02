@@ -17,10 +17,10 @@ class SafeFlightPlan:
     def __init__(self,
                  m,  # MAVLink connection
                  wp_file=None,  # TODO: waypoint file parser
-                 wp_dict={1: [-20, 0, 0],
-                          2: [0, -20, 0],
-                          3: [20, 0, 0],
-                          4: [0, 20, 0]},
+                 wp_dict={1: [0, -20, 0],
+                          2: [-20, 0, 0],
+                          3: [0, 20, 0],
+                          4: [20, 0, 0]},
                  wp_hover_time=15,  # [s]
                  speed=1,  # [m/s]
                  logger=None):
@@ -55,6 +55,29 @@ class SafeFlightPlan:
                                  startFromCurrentPosition=True,
                                  relativeEnd=True,
                                  logger=self.logger)
+
+    def payload_plan(self, p_payload_start):
+        """
+        The whole plan as one connected payload reference, built from where
+        the payload starts. Each leg begins where the last one ended, so the
+        legs join instead of re-anchoring on the drone every time.
+        """
+        legs = []
+        p0 = np.asarray(p_payload_start, dtype=float)
+        keys = sorted(self.wp_dict)
+        for key in keys:
+            p1 = p0 + np.asarray(self.wp_dict[key], dtype=float)
+
+            # hover at the start of every leg, and once more at the end of the
+            # last one. Hovering at both ends would sit two of them back to
+            # back at each corner, holding twice as long there as anywhere else
+            end_hover = self.wp_hover_time if key == keys[-1] else 0
+            legs.append(mission.ReferenceTrajectory(p0, p1, self.speed,
+                                                    self.wp_hover_time,
+                                                    end_hover))
+            p0 = p1
+
+        return legs
 
     def drone_trajectories(self):
         """
