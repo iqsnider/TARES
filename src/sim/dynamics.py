@@ -201,6 +201,12 @@ class OuterLoopPayloadLQR:
         # states used for designing the LQR controller
         outerLoopStates = [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]
         self.K[:, outerLoopStates] = subK
+        self.subK = subK
+        self.A = A
+        self.B = B
+        self.C = C
+        self.R = R
+        self.Q = Q
 
     def compute_u(self, state_err):
         return -self.K @ state_err
