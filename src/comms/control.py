@@ -513,7 +513,7 @@ class ControlComms:
             next_t += dt
             time.sleep(max(0, next_t - time.time()))
 
-    def fly_ardupilot_square(self, edge_length, hover_time, speed, accel, recorder=None, ekf=None, tol=0.5):
+    def fly_ardupilot_square(self, edge_length, hover_time, speed, accel, jerk, recorder=None, ekf=None, tol=0.5):
         """
         Uses the position setpoints and the ardupilot controller. Using the position bitmask allows to evaluate custom controllers against the ardupilot baseline.
         """
@@ -536,10 +536,14 @@ class ControlComms:
         # vehicle is no longer ours to command on the way out
         self.pilot_override = False
 
-        # WPNAV_ACCEL is what ardupilot ramps its position targets under, so
-        # this is the knob that matches its corners to the payload reference.
-        # A parameter, not runtime state, so once is enough
+        # WPNAV_ACCEL is what ardupilot ramps its position targets under and
+        # WPNAV_JERK is how sharply that ramp comes on. Left at its default of
+        # 1 it would spread the onset over seconds and excite the payload far
+        # less than the reference does, which would flatter the baseline for a
+        # reason that has nothing to do with the payload. Parameters, not
+        # runtime state, so once is enough
         self.set_param("WPNAV_ACCEL", accel*100)
+        self.set_param("WPNAV_JERK", jerk)
 
         # one relative ENU hop per side, walked in order. The zero hop first
         # settles the payload where it starts, the way the payload plan holds
@@ -559,8 +563,14 @@ class ControlComms:
             self._t_flight0 = t0
         leg_offset = t0 - self._t_flight0
 
+        # the square is pinned to where the drone started and every leg is
+        # chained off the last leg's reference, the way the payload plan
+        # chains its own. Anchoring a leg on the measured position instead
+        # would let the whole square follow the aircraft around
+        p_ref = x[0:3].copy()
+
         for i, corner in enumerate(corners):
-            p_from = x[0:3].copy()
+            p_from = p_ref
             p_ref = p_from + corner
 
             # the leg's reference, from the same generator the payload plan
@@ -571,7 +581,9 @@ class ControlComms:
                 p_from, p_ref, speed, 0, 0, accel=accel)
             t_leg = time.time()
 
-            mask = self.goto_offset_ned(S @ corner, yaw_ref)
+            # absolute, not an offset from wherever the drone is now, so
+            # ardupilot flies to the same corner the reference describes
+            mask = self.goto_ned(S @ p_ref, yaw_ref)
 
             self.set_speed(speed)
             self.logger.note_sent(bitmask=mask)
@@ -662,6 +674,21 @@ class ControlComms:
             self.m.target_system, self.m.target_component,
             M.MAV_CMD_DO_CHANGE_SPEED, 0,
             1, speed, -1, 0, 0, 0, 0)
+
+    def goto_ned(self, p_ned, yaw):
+        """
+        Ardupilot, please go to this position in the local NED frame
+        """
+        mask = POS_ONLY_LOCK_YAW
+        self.m.mav.set_position_target_local_ned_send(
+            0, self.m.target_system, self.m.target_component,
+            M.MAV_FRAME_LOCAL_NED, mask,
+            p_ned[0], p_ned[1], p_ned[2],
+            0, 0, 0,
+            0, 0, 0,
+            yaw, 0)
+
+        return mask
 
     def goto_offset_ned(self, offset_ned, yaw):
         """
