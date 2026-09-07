@@ -130,8 +130,16 @@ def kind_overlay(s, save, cam=False, post=False, compare=False):
     ekf_plots.overlay_video(s, records, save=out)
 
 
+def kind_paper(s, save, cam=False, post=False, compare=False):
+    """The two figures for the paper: velocity reference, payload track."""
+    import paper_plot
+    L = s.config.get("TETHER_LEN") if catalog.has_logged_states(s.fl) else None
+    paper_plot.plot_suite(s.fl, save=save and Path(save).expanduser(),
+                          stem=s.id, L=L)
+
+
 KINDS = {"drone": kind_drone, "traj": kind_traj, "ekf": kind_ekf,
-         "overlay": kind_overlay}
+         "overlay": kind_overlay, "paper": kind_paper}
 
 
 # ----------------------------------------------------------------------------
@@ -201,6 +209,10 @@ def main(argv=None):
     note = s.meta.get("note", "")
     print(f"{s.id}  {s.label}{'  -- ' + note if note else ''}")
     print(f"   log  {s.flight}")
+    if not len(s.fl):
+        print(f"   the flight log has no rows, this run aborted at startup",
+              file=sys.stderr)
+        return 1
     if s.has_camera:
         print(f"   cam  {s.pose}   offset {s.pose_offset:+.2f} s")
 

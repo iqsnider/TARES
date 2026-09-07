@@ -209,8 +209,14 @@ class Session:
         e_pose = _clock_epoch(self.pose, "time_s")
         e_flight = _clock_epoch(self.flight, "cur_time")
         if e_pose is None or e_flight is None:
+            missing = " and ".join(
+                name for name, epoch in (("flight log", e_flight),
+                                         ("camera csv", e_pose))
+                if epoch is None)
             raise ValueError(
-                f"session {self.id} predates wall_time in poses.csv")
+                f"session {self.id}: no clock to align in the {missing}. A run "
+                f"that aborted at startup logs a header and no rows, and a "
+                f"session from before wall_time has nothing to align to")
         offset = e_flight - e_pose
         return offset
 

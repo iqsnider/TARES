@@ -4,6 +4,7 @@ import numpy as np
 
 import Prm.config as config
 import sim.dynamics as dynamics
+import sim.mission_manager as mission
 import sim.estimation.ekf as ekfm
 import sim.transformations as tf
 
@@ -540,8 +541,13 @@ class ControlComms:
         # A parameter, not runtime state, so once is enough
         self.set_param("WPNAV_ACCEL", accel*100)
 
-        # one relative ENU hop per side, walked in order
-        corners = [np.array([0, -edge_length, 0], dtype=float), # South
+        # one relative ENU hop per side, walked in order. The zero hop first
+        # settles the payload where it starts, the way the payload plan holds
+        # at the start of every leg, and it puts the drone's starting point in
+        # the log so the reference covers the first leg and not just the last
+        # three
+        corners = [np.zeros(3),                                 # settle
+                   np.array([0, -edge_length, 0], dtype=float), # South
                    np.array([-edge_length, 0, 0], dtype=float), # West
                    np.array([0, edge_length, 0], dtype=float), # North
                    np.array([edge_length, 0, 0], dtype=float)] # East
@@ -553,13 +559,26 @@ class ControlComms:
             self._t_flight0 = t0
         leg_offset = t0 - self._t_flight0
 
-        for i, corner in enumerate(corners, start=1):
-            p_ref = x[0:3] + corner
+        for i, corner in enumerate(corners):
+            p_from = x[0:3].copy()
+            p_ref = p_from + corner
+
+            # the leg's reference, from the same generator the payload plan
+            # uses, so both runs are scored against a reference of the same
+            # shape instead of one that sits on the corner. The settle hop has
+            # no distance to cover and stays where it is
+            leg_ref = None if not corner.any() else mission.RampedTrajectory(
+                p_from, p_ref, speed, 0, 0, accel=accel)
+            t_leg = time.time()
+
             mask = self.goto_offset_ned(S @ corner, yaw_ref)
 
             self.set_speed(speed)
             self.logger.note_sent(bitmask=mask)
-            print(f"flying leg {i}: {corner} m")
+            if i == 0:
+                print(f"settling for {hover_time}s before the first leg...")
+            else:
+                print(f"flying leg {i}: {corner} m")
 
             # ardupilot sets its own pace, so the leg ends when the drone
             # arrives rather than on a clock, and then holds for hover_time
@@ -581,8 +600,9 @@ class ControlComms:
 
                 if arrived is None and np.linalg.norm(p_ref - x[0:3]) < tol:
                     arrived = time.time()
-                    print(f"leg {i} reached at t={t:.1f}s, holding "
-                          f"{hover_time}s")
+                    if i:
+                        print(f"leg {i} reached at t={t:.1f}s, holding "
+                              f"{hover_time}s")
 
                 payload = {}
                 if watching:
@@ -611,11 +631,14 @@ class ControlComms:
                                                 P[ekfm.IX_PSI_P, ekfm.IX_PSI_P]))
 
                 # log sent values, on the flight-wide clock rather than this
-                # leg's. u stays NaN: the acceleration is ardupilot's, not
-                # ours. The payload reference is the drone one hung a tether
-                # below, the same one the payload controller is scored on
-                self.logger.log(t + leg_offset, x, p_ref, yaw_ref=yaw_ref,
-                                payload_p_ref=p_ref - tether, **payload)
+                # leg's. u stays NaN: the acceleration is ardupilot's, not ours.
+                # The payload reference is that leg's trajectory hung a tether
+                # below, so it sweeps along the leg the way the payload
+                # controller's does
+                p_now = (p_ref if leg_ref is None
+                         else leg_ref(time.time() - t_leg)[0])
+                self.logger.log(t + leg_offset, x, p_now, yaw_ref=yaw_ref,
+                                payload_p_ref=p_now - tether, **payload)
 
                 # time step
                 next_t += dt
