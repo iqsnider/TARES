@@ -73,7 +73,7 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 # settings
 CAM_GAIN = 1  # 1
-CAM_EXP_ABS = 3  # 3
+CAM_EXP_ABS = 2  # 3
 CAM_PREVIEW_PORT = 8080  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1
@@ -108,8 +108,8 @@ CENTER_MARKER_ID = 245
 RIGHT_MARKER_ID = 233
 
 # payload color ring parameters (payload_tracking/color_track.py)
-CIRCLE_DIAMETER = 0.31  # [m] outer diameter of the ring
-CIRCLE_BAND = 0.015  # [m] width of the colored band
+CIRCLE_DIAMETER =0.42# 0.31 #0.42  # [m] outer diameter of the ring
+CIRCLE_BAND = 0.035  # [m] width of the colored band
 # hue is 0-179 in OpenCV, and red straddles 0, which color_mask wraps for.
 # Dry grass and bare soil sit close to red in hue, so saturation is what
 # separates the tape from the ground rather than hue

@@ -26,7 +26,7 @@ if __name__ == '__main__':
     # connection = "udp:127.0.0.1:14550"
     # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
-    speed = 1
+    speed = 1.5
 
     # the ramp onto speed, matched to the WPNAV_ACCEL the ardupilot baseline
     # flies so the two runs differ in the controller and nothing else
@@ -73,10 +73,10 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
-        wp_hover_time = 20
+        wp_hover_time = 15
 
         # define outer-loop control law
-        controller = dynamics.OuterLoopPayloadLQR()
+        controller = dynamics.OuterLoopPayloadLQI()
         logger.set_controller(controller)
 
         # payload swing estimator: attitude comes from the logger cache, which

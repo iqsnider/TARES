@@ -26,12 +26,12 @@ if __name__ == '__main__':
     # connection = "udp:127.0.0.1:14550"
     # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
-    speed = 1
+    speed = 1.5
 
     # gentle enough that the ramp is not a step to a payload swinging on a
     # 6 m tether, and the softest ardupilot documents for WPNAV_ACCEL, so the
     # baseline and the payload run share it
-    accel = 0.5
+    accel = 1
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09022026/ardupilot_icra_test_{stamp}"
@@ -74,7 +74,7 @@ if __name__ == '__main__':
 
         # mission reference
         edge_length = 20
-        wp_hover_time = 20
+        wp_hover_time = 15
 
         # payload swing estimator: attitude comes from the logger cache, which
         # ControlComms has already populated by blocking for the first state.

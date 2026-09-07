@@ -36,7 +36,7 @@ M = mavutil.mavlink
 
 # how long each heading is watched. A 6.2 m tether is a 5 s pendulum, so 20 s
 # is four swings, and it is whole swings that average out of the mean
-HOLD_TIME = 20  # [s]
+HOLD_TIME = 10  # [s]
 SETTLE_TIME = 5  # [s] after a rotation, before the samples start counting
 YAW_STEP = 90  # [deg] between holds
 YAW_RATE = 15  # [deg/s]

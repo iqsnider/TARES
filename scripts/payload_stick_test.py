@@ -46,5 +46,7 @@ if __name__ == '__main__':
     logger.set_controller(controlLaw)
 
     print("monitoring for GUIDED mode...")
+    comms.set_mode(m, "GUIDED")
+    comms.set_guid_options(m, 48)
     # monitors the mode and swaps to payload stick control when in GUIDED
     controlLink.monitor_mode(payload_controller=controlLaw)
