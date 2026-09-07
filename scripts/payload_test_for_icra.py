@@ -30,7 +30,7 @@ if __name__ == '__main__':
 
     # the ramp onto speed, matched to the WPNAV_ACCEL the ardupilot baseline
     # flies so the two runs differ in the controller and nothing else
-    accel = 0.5
+    accel = 2.0
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09022026/payload_icra_test_{stamp}"
@@ -73,6 +73,7 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
+        edge_length = 15
         wp_hover_time = 15
 
         # define outer-loop control law
@@ -87,6 +88,10 @@ if __name__ == '__main__':
         # payload actually starts, with every leg picking up where the last
         # one ended so the corners join
         plan = mission.SafeFlightPlan(m,
+                                      wp_dict={1: [0, -edge_length, 0],  # South
+                                               2: [-edge_length, 0, 0],  # West
+                                               3: [0, edge_length, 0],  # North
+                                               4: [edge_length, 0, 0]},  # East
                                       wp_hover_time=wp_hover_time,
                                       speed=speed,
                                       logger=logger)

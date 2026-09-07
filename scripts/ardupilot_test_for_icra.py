@@ -31,7 +31,12 @@ if __name__ == '__main__':
     # gentle enough that the ramp is not a step to a payload swinging on a
     # 6 m tether, and the softest ardupilot documents for WPNAV_ACCEL, so the
     # baseline and the payload run share it
-    accel = 1
+    accel = 2.0
+
+    # how sharply that acceleration comes on. At 5 m/s^3 ardupilot reaches the
+    # 2 m/s^2 in 0.4 s, which is about the reference's own 0.5 s ramp, so both
+    # runs hit the payload with the same thing
+    jerk = 5
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09022026/ardupilot_icra_test_{stamp}"
@@ -73,7 +78,7 @@ if __name__ == '__main__':
                                    logger=logger)
 
         # mission reference
-        edge_length = 20
+        edge_length = 15
         wp_hover_time = 15
 
         # payload swing estimator: attitude comes from the logger cache, which
@@ -84,7 +89,8 @@ if __name__ == '__main__':
         # run the baseline: ardupilot flies every side of the square
         print("running ardupilot baseline...")
         controlLink.fly_ardupilot_square(edge_length, wp_hover_time, speed,
-                                         accel, recorder=recorder, ekf=ekf)
+                                         accel, jerk,
+                                         recorder=recorder, ekf=ekf)
     finally:
         try:
             if controlLink is None or not controlLink.pilot_override:
