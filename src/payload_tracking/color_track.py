@@ -31,7 +31,7 @@ class ColorCircleRecorder:
                  min_area_px=150,
                  min_coverage_deg=200,  # the minimum angle that the blob must cover
                  expected_range=None,  # the tether length, if known
-                 range_tol=3,  # tolerance around the tether length [m]
+                 range_tol=0.8,  # gate width, as a fraction of the tether
                  morph_px=3,  # kernel for closing the gap
                  video_out="recording.avi",
                  csv_out="circles.csv",

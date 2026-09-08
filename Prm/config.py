@@ -125,6 +125,12 @@ CIRCLE_MIN_AREA_PX = 150
 # to +-29 px below it. Measured about the centroid this number reads high,
 # since a centroid on the arc has points on every side of it
 CIRCLE_MIN_COVERAGE_DEG = 70
+# how far the range implied by the fitted radius may sit from the tether
+# length before the blob is thrown out, as a FRACTION of the tether and not a
+# distance. A ring whose arc is partly cut fits a radius that reads small, and
+# a tight gate throws those frames away: on the 0902 runs 0.35 dropped rings
+# that 0.8 keeps, taking 142232 from 95.9 to 99.7 per cent
+CIRCLE_RANGE_TOL = 0.8
 
 
 ##### mission parameters ######
