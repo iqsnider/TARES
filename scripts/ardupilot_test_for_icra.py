@@ -26,7 +26,7 @@ if __name__ == '__main__':
     # connection = "udp:127.0.0.1:14550"
     # takeoff_altitude = 15
     control_freq = config.CONTROL_FREQUENCY
-    speed = 1.5
+    speed = 1.25
 
     # gentle enough that the ramp is not a step to a payload swinging on a
     # 6 m tether, and the softest ardupilot documents for WPNAV_ACCEL, so the

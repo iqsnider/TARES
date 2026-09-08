@@ -55,6 +55,12 @@ def _config_snapshot():
             out[name] = val.tolist()
         elif val is None or isinstance(val, (int, float, str, bool)):
             out[name] = val
+
+    # the airframe file as it was typed. config.py derives most weights from a
+    # tolerance, so the snapshot above holds (1/tol)^2 and not the tol that was
+    # actually tuned
+    out["AIRFRAME_JSON"] = dict(config._af)
+
     return out
 
 

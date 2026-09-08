@@ -108,7 +108,7 @@ CENTER_MARKER_ID = 245
 RIGHT_MARKER_ID = 233
 
 # payload color ring parameters (payload_tracking/color_track.py)
-CIRCLE_DIAMETER =0.42# 0.31 #0.42  # [m] outer diameter of the ring
+CIRCLE_DIAMETER = 0.31  # 0.31 #0.42  # [m] outer diameter of the ring
 CIRCLE_BAND = 0.035  # [m] width of the colored band
 # hue is 0-179 in OpenCV, and red straddles 0, which color_mask wraps for.
 # Dry grass and bare soil sit close to red in hue, so saturation is what
