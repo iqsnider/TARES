@@ -1,3 +1,13 @@
+# The camera mount bolts on forwards or backwards and nothing else, so its
+# yaw only changes when the flight computer is remounted. Each entry is the
+# yaw in force from that date until the next one, and a date with no entry
+# before it keeps whatever its own config_snapshot.json says. The computer
+# was remounted between the 2 Sep and 9 Sep 2026 tests, which turned the
+# camera around without the airframe file following it.
+[camera_yaw_deg]
+20260909 = 0
+
+
 [sessions.20260723_114556]
 note = "23 Jul 2026, last test of the day"
 

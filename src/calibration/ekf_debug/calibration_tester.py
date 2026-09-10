@@ -1,15 +1,3 @@
-"""
-Camera roll and pitch calibration from the hanging payload.
-
-Take off first, then run this. The drone holds still while the payload swings
-about the vertical under the pivot, so the mean bearing over a hold is straight
-down and whatever is left over is the mount. Holding three headings 90 degrees
-apart separates the part that turns with the drone, which is the camera, from
-the part that stays put, which is wind.
-
-Prints the recommended angles and sets nothing.
-"""
-
 # mission control imports
 import comms.common as comms
 from comms.control import ControlComms, get_state_enu
@@ -189,7 +177,7 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_09112026/camera_ext_calibration_{stamp}"
+    data_dir = f"data/test_09092026/camera_ext_calibration_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":

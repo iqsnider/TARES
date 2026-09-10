@@ -33,7 +33,7 @@ if __name__ == '__main__':
     accel = 2.0
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_09092026/payload_icra_test_{stamp}"
+    data_dir = f"data/test_09112026/payload_icra_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":

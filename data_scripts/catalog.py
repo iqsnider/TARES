@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sim.transformations as tf
+
 # Root of the archive. Point TARES_DATA elsewhere to work off a copy.
 DATA_ROOT = Path(os.environ.get("TARES_DATA", "~/TARES/data")).expanduser()
 
@@ -58,6 +60,24 @@ def defaults():
     The [defaults] table
     """
     return _metadata().get("defaults", {})
+
+
+def _camera_yaw(when):
+    """
+    CAM_YAW_DEG in force on a date, from the [camera_yaw_deg] table.
+
+    The mount bolts on forwards or backwards and nothing else, so the
+    camera's yaw is a fact about the airframe on a date rather than about one
+    flight. None when no entry covers the date, which leaves the snapshot's
+    own CAM_R alone.
+    """
+    table = _metadata().get("camera_yaw_deg", {})
+    covered = [k for k in table if k <= when.strftime("%Y%m%d")]
+    if not covered:
+        return None
+    yaw = table[max(covered)]
+
+    return yaw
 
 
 def _as_date(token):
@@ -193,6 +213,16 @@ class Session:
                 f"session {self.id} has no config_snapshot.json")
         with open(path) as f:
             snap = json.load(f)
+
+        # the snapshot holds whatever the airframe file said that day, so a
+        # flight flown after the mount was turned around carries a CAM_R that
+        # is 180 deg out
+        yaw = _camera_yaw(self.time)
+        if yaw is not None:
+            snap["CAM_YAW"] = np.radians(yaw)
+            snap["CAM_R"] = tf.T_BC(snap["CAM_ROLL"], snap["CAM_PITCH"],
+                                    snap["CAM_YAW"]).tolist()
+
         return snap
 
     @cached_property

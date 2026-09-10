@@ -21,7 +21,7 @@ if __name__ == '__main__':
     control_freq = config.CONTROL_FREQUENCY
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    data_dir = f"data/test_09092026/stick_test_{stamp}"
+    data_dir = f"data/test_09112026/stick_test_{stamp}"
     video_out = f"{data_dir}/recording.avi"
 
     if config.EKF_SOURCE == "aruco":
@@ -46,7 +46,7 @@ if __name__ == '__main__':
     logger.set_controller(controlLaw)
 
     print("monitoring for GUIDED mode...")
-    comms.set_mode(m, "GUIDED")
-    comms.set_guid_options(m, 48)
+    # comms.set_mode(m, "GUIDED")
+    # comms.set_guid_options(m, 48)
     # monitors the mode and swaps to payload stick control when in GUIDED
-    controlLink.monitor_mode(payload_controller=controlLaw)
+    controlLink.monitor_mode(payload_controller=controlLaw, remap="POSHOLD")

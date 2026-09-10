@@ -165,7 +165,8 @@ class StickControl(ControlComms):
 
     def monitor_mode(self,
                      payload_controller=None,
-                     payload_control_mode="GUIDED"):
+                     payload_control_mode="GUIDED",
+                     remap=None):
         """
         Monitors the current mode of the flight controller.
         Will start running payload stick control if mode switches to GUIDED.
@@ -179,6 +180,14 @@ class StickControl(ControlComms):
                 c = self.logger.cache
 
                 self.mode = c["echoed_mode"]
+
+                ######### experimental remove if unsafe (POSHOLD is probably useful for GPS QoS issues) ######
+                # internally remaps POSHOLD to GUIDED since IF1200 won't let you set a GUIDED mode on any of the channels
+                if remap is not None and self.mode == remap:
+                    comms.set_mode(self.m, "GUIDED", logger=self.logger)
+                    comms.set_guid_options(self.m, 48)
+                    self.mode = "GUIDED"
+                ##############################################
 
                 if self.mode == payload_control_mode:
                     print(
