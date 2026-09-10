@@ -111,7 +111,9 @@ EKF_TUNING = {"q_xy": "EKF_Q_XY", "q_yaw": "EKF_Q_YAW",
               "sigma_alpha_0": "EKF_SIGMA_ALPHA_0",
               "sigma_rate_0": "EKF_SIGMA_RATE_0",
               "sigma_psi_p_0": "EKF_SIGMA_PSI_P_0",
-              "zeta": "EKF_ZETA"}
+              "zeta": "EKF_ZETA",
+              "gate_n_sigma": "EKF_GATE_N_SIGMA",
+              "gate_max_reject": "EKF_GATE_MAX_REJECT"}
 
 
 def ekf_tuning(cfg):
@@ -125,6 +127,13 @@ def ekf_tuning(cfg):
     tuning = {arg: cfg[key] for arg, key in EKF_TUNING.items() if key in cfg}
     if not tuning:
         tuning = config.ekf_tuning_for(cfg["AIRFRAME"])
+
+    # a session that snapshotted its tuning but not a gate width flew before
+    # the innovation gate existed, so it replays without one. Leaving the key
+    # out instead would hand the EKF a None and quietly gate a flight that was
+    # never gated
+    elif "gate_n_sigma" not in tuning:
+        tuning["gate_n_sigma"] = 0
 
     return tuning
 

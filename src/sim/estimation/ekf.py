@@ -47,6 +47,9 @@ class EKF:
                  sigma_psi_p_0=None,  # initial payload yaw 1-sigma [rad]
                  zeta=None,  # swing damping ratio
                  source=None,  # aruco or color
+                 gate_n_sigma=None,  # innovation gate width [sigma]
+                 gate_max_reject=None,  # rejections in a row before reopening
+                 gate_reinflate=None,  # factor P grows by when that happens
                  L=None, g=None, geom=None):
 
         # default to live Prm/config.py; pass these explicitly to replay a
@@ -76,8 +79,27 @@ class EKF:
         self.source = config.EKF_SOURCE if source is None else source
         self.meas_dim = MEAS_DIM_BY_SOURCE[self.source]
 
+        # innovation gate. None takes the configured width, the way every
+        # other tuning parameter here does; pass 0 to turn the gate off and
+        # fold in every measurement, which is how the filter behaved before
+        # the gate existed
+        self.gate_n_sigma = (config.EKF_GATE_N_SIGMA if gate_n_sigma is None
+                             else gate_n_sigma)
+        self.gate_max_reject = (config.EKF_GATE_MAX_REJECT
+                                if gate_max_reject is None else gate_max_reject)
+        self.gate_reinflate = (config.EKF_GATE_REINFLATE
+                               if gate_reinflate is None else gate_reinflate)
+
         # last measured minus predicted, None until a measurement lands
         self.innov = None
+
+        # gate bookkeeping: the normalised innovation of the last measurement,
+        # whether the gate threw it out, and how many it has thrown out in a
+        # row. A caller logs these to see what the camera offered and what the
+        # filter chose to believe
+        self.nis = None
+        self.rejected = False
+        self.n_rejected = 0
 
         # initialize EKF
         S = tf.T_ENU_from_NED()
@@ -221,9 +243,51 @@ class EKF:
 
         # innovation covariance
         S = H @ P @ H.T + R
+        S_inv = np.linalg.inv(S)
+
+        # normalised innovation squared: how far this bearing sits from the
+        # filter's own prediction, measured in the uncertainty the filter
+        # already admits to. Scaling by S rather than by sigma_xy is what lets
+        # the gate open on its own while P is still large after startup or a
+        # long dropout, and close once the estimate has settled
+        self.nis = float(y @ S_inv @ y)
+
+        # a blob that lands tens of degrees from where the payload can be is
+        # not the payload, and folding it in at full weight drags the estimate
+        # with it. But a rejection is also evidence against the filter: the
+        # prediction and the camera disagree, and P said that should not
+        # happen. Whichever of them is wrong, P is too small to describe it.
+        #
+        # So P grows on EVERY rejection, not after a run of them. Waiting was a
+        # trap: while the state coasted, the prediction drifted further, the
+        # next measurement disagreed by more, and the gate refused that one
+        # too. On 125934 that locked out completely -- past 50 ms without an
+        # update it refused 100 per cent of a 21 Hz stream, 87 per cent of
+        # which sat within 2 deg of the track its neighbours drew, in one case
+        # for 65 frames and 2.7 s.
+        #
+        # Growing P each time cannot lock out. The gate widens geometrically
+        # while the disagreement grows at most linearly, so it reopens within
+        # a few frames on its own, and the measurement that reopens it is
+        # folded at a gain matching how lost the filter admits it is. A real
+        # outlier costs a little confidence and is still refused; a filter
+        # that has genuinely drifted is back on the camera in a few frames
+        self.rejected = False
+        if self.gate_n_sigma and self.gate_n_sigma > 0:
+            if self.nis > self.gate_n_sigma**2:
+                self.n_rejected += 1
+                self.rejected = True
+                # the hard cap should now be unreachable, since the geometric
+                # widening admits any finite innovation first. Kept so a
+                # pathological case still ends in a measurement, not a lockout
+                if self.n_rejected >= self.gate_max_reject:
+                    self.n_rejected = 0
+                else:
+                    return xi, P*self.gate_reinflate
+        self.n_rejected = 0
 
         # kalman gain
-        K = P @ H.T @ np.linalg.inv(S)
+        K = P @ H.T @ S_inv
         xi = xi + K @ y
         xi[IX_PSI_P] = wrap_pi(xi[IX_PSI_P])
         P = (np.eye(STATE_DIM) - K @ H) @ P

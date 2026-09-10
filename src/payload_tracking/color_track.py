@@ -32,6 +32,7 @@ class ColorCircleRecorder:
                  min_coverage_deg=200,  # the minimum angle that the blob must cover
                  expected_range=None,  # the tether length, if known
                  range_tol=0.8,  # gate width, as a fraction of the tether
+                 max_bearing_deg=None,  # widest swing a blob may sit at
                  morph_px=3,  # kernel for closing the gap
                  video_out="recording.avi",
                  csv_out="circles.csv",
@@ -58,6 +59,7 @@ class ColorCircleRecorder:
         self.min_coverage_deg = min_coverage_deg
         self.expected_range = expected_range
         self.range_tol = range_tol
+        self.max_bearing_deg = max_bearing_deg
 
         self.video_out = os.path.expanduser(video_out)
         self.csv_out = os.path.expanduser(csv_out)
@@ -223,6 +225,39 @@ class ColorCircleRecorder:
 
         return off <= self.range_tol*self.expected_range
 
+    def bearing_deg(self, cx, cy):
+        """
+        How far off the camera's optical axis a pixel sits, in degrees
+        """
+        xy = cv2.undistortPoints(
+            np.array([[[cx, cy]]], dtype=np.float64), self.mtx,
+            self.dist).ravel()
+
+        return np.degrees(np.arctan2(np.hypot(xy[0], xy[1]), 1.0))
+
+    def _bearing_plausible(self, cx, cy):
+        """
+        Whether a blob sits within the swing the tether allows.
+
+        This is the gate that matters, because the filter is fed bearing and
+        nothing else. Range comes from the fitted radius, which is the fragile
+        half of the fit: an arc cut by the tether fits a radius that reads
+        small and a range that reads long, while its centroid -- and so its
+        bearing -- is still good. Gating on range therefore throws away mostly
+        sound measurements, and on the 0909 runs the frames it rejected sat a
+        median 0.6 deg off the track its neighbours drew, against a 4 deg
+        noise floor for the frames it kept. Cutting on bearing instead keeps
+        those and still refuses a blob that cannot be the payload.
+
+        The angle is measured off the camera axis rather than off vertical, so
+        drone attitude leaks in; at the few degrees of lean this aircraft
+        flies that is slop a plausibility gate can carry
+        """
+        if not self.max_bearing_deg:
+            return True
+
+        return self.bearing_deg(cx, cy) <= self.max_bearing_deg
+
     def find_blob(self, mask):
         """
         """
@@ -248,6 +283,12 @@ class ColorCircleRecorder:
             # gets the range from circle for debugging and validation
             rng = self.range_from_radius(r)
             if not self._range_expected(rng):
+                continue
+
+            # a blob out at an impossible swing is not the payload. Checked
+            # per candidate rather than on the winner, so a spurious blob
+            # cannot outrank the real ring on area and take the frame with it
+            if not self._bearing_plausible(cx, cy):
                 continue
 
             # keeps the largest arc as the best blob

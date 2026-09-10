@@ -24,6 +24,7 @@ COLUMNS = [
     "payload_alphadot_x", "payload_alphadot_y",
     "payload_psi_p", "payload_range_meas",
     "payload_innov_x", "payload_innov_y", "payload_innov_psi",
+    "payload_nis", "payload_gate_rejected",
     "payload_cov_axx", "payload_cov_ayy", "payload_cov_axy",
     "payload_cov_psipsi",
     "ux", "uy", "uz", "yaw_ref", "yaw_rate_ref",
@@ -244,7 +245,8 @@ class FlightLogger:
             payload_p_ref=None, payload_v_ref=None,
             payload_alpha=None, payload_alphadot=None,
             payload_psi_p=None, payload_range=None,
-            payload_innov=None, payload_cov=None):
+            payload_innov=None, payload_nis=None, payload_rejected=None,
+            payload_cov=None):
         """
         Call once per control tick, AFTER send_accel/note_sent.
           t: loop time since start (control loop's `t`)
@@ -256,8 +258,18 @@ class FlightLogger:
           payload_range: camera range from the tether pivot to the payload
             center [m], the raw measurement, not an estimate
           payload_innov: (b_x, b_y, psi_p) measured minus predicted, the
-            residual the filter corrected on. NaN on a tick with no
-            measurement, which is how a blackout reads
+            residual the filter OFFERED to correct on. Recorded whether or not
+            the gate then accepted it, so a rejected frame still shows what
+            the camera said. NaN on a tick with no measurement, which is how a
+            blackout reads
+          payload_nis: that residual normalised by the innovation covariance,
+            so it is comparable against the gate width in EKF_GATE_N_SIGMA
+            squared. This is the number that says whether the filter's own
+            uncertainty is honest: it should sit near 1-2, and a median far
+            above that means the filter believes itself more than it should
+          payload_rejected: 1 if the gate refused this measurement, 0 if it
+            was folded in, NaN on a tick with no measurement. A run of 1s is
+            the filter coasting on prediction
           payload_cov: (Pxx, Pyy, Pxy, Ppp), the alpha_x/alpha_y/psi_p block
             of the EKF covariance, not the full state covariance
         """
@@ -283,6 +295,10 @@ class FlightLogger:
         # a color tracker measures no yaw, so its innovation is two long
         pl_inn = ((NAN,)*3 if payload_innov is None else
                   tuple(payload_innov) + (NAN,)*(3 - len(payload_innov)))
+        pl_nis = payload_nis if payload_nis is not None else NAN
+        # logged as 1/0 rather than True/False so the column stays numeric and
+        # a reader can average it straight into a rejection rate
+        pl_rej = NAN if payload_rejected is None else float(bool(payload_rejected))
         pl_cov = payload_cov if payload_cov is not None else (NAN, NAN, NAN, NAN)
         hb_age = now - \
             c["last_hb_wall"] if c["last_hb_wall"] is not None else NAN
@@ -312,6 +328,7 @@ class FlightLogger:
             "payload_psi_p": pl_psi, "payload_range_meas": pl_rng,
             "payload_innov_x": pl_inn[0], "payload_innov_y": pl_inn[1],
             "payload_innov_psi": pl_inn[2],
+            "payload_nis": pl_nis, "payload_gate_rejected": pl_rej,
             "payload_cov_axx": pl_cov[0], "payload_cov_ayy": pl_cov[1],
             "payload_cov_axy": pl_cov[2], "payload_cov_psipsi": pl_cov[3],
             # control input

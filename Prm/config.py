@@ -73,7 +73,7 @@ MASS_TOTAL = MASS_DRONE + MASS_PAYLOAD_EFF
 
 # settings
 CAM_GAIN = 1  # 1
-CAM_EXP_ABS = 2  # 3
+CAM_EXP_ABS = 1  # 3
 CAM_PREVIEW_PORT = 8080  # None  # 8080
 CAM_FPS = 48
 CAM_STRIDE = 1
@@ -115,7 +115,20 @@ CIRCLE_BAND = 0.035  # [m] width of the colored band
 # separates the tape from the ground rather than hue
 CIRCLE_HUE = 0  # red
 CIRCLE_HUE_WIDTH = 12
-CIRCLE_SAT_MIN = 130
+# 130 sat above the tape's own median saturation and only ever caught the
+# brightest part of the band. It survived while the sun was behind the trees
+# and failed once the sun came round: sampling the recordings, saturation at
+# matched brightness fell 10-15 points between the 1125 and 1259 flights
+# (V 150-200 pixels went from S 150 to S 131), glare pixels doubled and so did
+# shadowed ones, and detections went from 92.9 to 43.5 per cent of frames.
+# 90 keeps 59 per cent of ring pixels against 33 at 130, and the ground it
+# lets in goes only from 0.22 to 0.44 per cent, so the tape-versus-soil
+# selectivity this threshold exists for is unchanged. Sized with headroom for
+# the sun to move further, since a light level cannot be retuned mid-flight
+CIRCLE_SAT_MIN = 90
+# the deeper shadows that came with the direct sun put 3.5 per cent of band
+# pixels under V=60, so this has less margin than it looks. Left alone for
+# now; drop it to 40 if detections fall off again in hard light
 CIRCLE_VAL_MIN = 50
 CIRCLE_MIN_AREA_PX = 150
 # how far around the circle the visible color must wrap, in degrees, measured
@@ -127,10 +140,25 @@ CIRCLE_MIN_AREA_PX = 150
 CIRCLE_MIN_COVERAGE_DEG = 70
 # how far the range implied by the fitted radius may sit from the tether
 # length before the blob is thrown out, as a FRACTION of the tether and not a
-# distance. A ring whose arc is partly cut fits a radius that reads small, and
-# a tight gate throws those frames away: on the 0902 runs 0.35 dropped rings
-# that 0.8 keeps, taking 142232 from 95.9 to 99.7 per cent
+# distance. Deliberately loose, because range is the wrong thing to cut on:
+# it comes from the fitted radius, which an arc cut by the tether reads small,
+# while that same blob's centroid and bearing are still good. Tightening this
+# to 0.35 on 115209 took detections from ~75 to 13.7 per cent of frames --
+# the gate runs during blob selection, so a rejected blob is not a filtered
+# measurement, it is a frame that reports nothing at all. CIRCLE_MAX_BEARING
+# below does the rejecting now
 CIRCLE_RANGE_TOL = 0.8
+# widest angle off the camera axis a blob may sit at and still be believed,
+# in degrees. This is the gate that replaced the tight range gate: the filter
+# consumes bearing and nothing else, so this cuts on the quantity that is
+# actually used, and it refuses the 40-55 deg blobs that dragged the earlier
+# 0909 estimates around. 30 was chosen when the payload had never been seen
+# past 10.6 deg; on 125934 the accepted bearings ran right up to 29.95, which
+# means the gate was clipping the peaks of a real swing. Losing measurements
+# at maximum swing is the worst place to lose them, so this now sits well
+# clear of any swing the aircraft has flown while still being far inside the
+# lens, whose corners are about 70 deg out
+CIRCLE_MAX_BEARING_DEG = 45.0
 
 
 ##### mission parameters ######
@@ -221,14 +249,27 @@ def ekf_tuning_for(airframe):
               "sigma_yaw": np.radians(af["EKF_SIGMA_YAW_DEG"]),
               "sigma_alpha_0": np.radians(af["EKF_SIGMA_ALPHA_0_DEG"]),
               "sigma_rate_0": np.radians(af["EKF_SIGMA_RATE_0_DEG"]),
-              "sigma_psi_p_0": np.radians(af["EKF_SIGMA_PSI_P_0_DEG"])}
+              "sigma_psi_p_0": np.radians(af["EKF_SIGMA_PSI_P_0_DEG"]),
+              # defaulted, so a snapshot written before the gate existed
+              # replays with it rather than raising
+              "gate_n_sigma": af.get("EKF_GATE_N_SIGMA", 5.0),
+              "gate_max_reject": af.get("EKF_GATE_MAX_REJECT", 25),
+              "gate_reinflate": af.get("EKF_GATE_REINFLATE", 2.0)}
 
     return tuning
 
 
 _ekf = ekf_tuning_for(AIRFRAME)
 
-# process noise on alpha_ddot_xy and on psi_p
+# process noise on alpha_ddot_xy and on psi_p. This is how much the filter
+# admits its own pendulum model can be wrong, and at 0.02 it admitted almost
+# nothing: on 120448 it held a 0.3 deg 1-sigma on a swing angle its model
+# could only predict to several degrees, so honest measurements arrived
+# reading 20-sigma. Without a gate that merely made the estimate noisy; with
+# one it refused 34.5 per cent of a clean 35 Hz measurement stream, coasted on
+# prediction until the forced-accept fired, and snapped up to 19 deg in a
+# single tick, 22 times in 65 s. 0.1 puts the normalised innovation back in
+# range and takes rejections to zero on that flight
 EKF_Q_XY = _ekf["q_xy"]
 EKF_Q_YAW = _ekf["q_yaw"]
 
@@ -245,6 +286,25 @@ EKF_SIGMA_YAW = _ekf["sigma_yaw"]
 EKF_SIGMA_ALPHA_0 = _ekf["sigma_alpha_0"]
 EKF_SIGMA_RATE_0 = _ekf["sigma_rate_0"]
 EKF_SIGMA_PSI_P_0 = _ekf["sigma_psi_p_0"]
+
+# how far off its own prediction a bearing may land before the filter refuses
+# it, in standard deviations of the innovation. SIGMA_XY is half a degree, so
+# without a gate a blob tens of degrees away is an eighty sigma event that
+# still gets folded in at full weight: the 0909 runs logged innovations
+# peaking at 30-42 deg. The threshold is on the innovation covariance, not on
+# SIGMA_XY alone, so it opens by itself while P is still large at startup
+EKF_GATE_N_SIGMA = _ekf["gate_n_sigma"]
+# backstop only: consecutive rejections after which a measurement is taken
+# regardless. With REINFLATE applied per rejection the gate reopens on its own
+# long before this, so it should never be reached; it exists so a pathological
+# case still ends in a measurement rather than a lockout
+EKF_GATE_MAX_REJECT = _ekf["gate_max_reject"]
+# how much P grows on EACH rejection. 2 reopens the gate on a 100-sigma
+# disagreement inside about seven frames, a third of a second at 21 Hz, while
+# still costing a lone outlier almost nothing. Raising it recovers faster and
+# trusts the camera sooner; lowering it holds the estimate through a longer
+# run of bad frames
+EKF_GATE_REINFLATE = _ekf["gate_reinflate"]
 
 
 ##### transmitter control tuning #####

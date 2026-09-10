@@ -121,7 +121,12 @@ def step_ekf(ekf, meas, a_I, dt, phi, theta, psi):
     """
     S = tf.T_ENU_from_NED()
     ekf.T_IB = S @ tf.T_IB(phi, theta, psi) @ S
+    # cleared together: all three describe one measurement, so leaving nis or
+    # rejected behind would report the last camera frame's verdict on a tick
+    # that never saw one
     ekf.innov = None
+    ekf.nis = None
+    ekf.rejected = False
 
     xi, P = ekf.ekf_predict(ekf.xi, ekf.P, a_I, dt)
 

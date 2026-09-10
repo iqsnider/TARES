@@ -297,6 +297,10 @@ class ControlComms:
                                payload_alphadot=(xi[2], xi[3]),
                                payload_psi_p=xi[ekfm.IX_PSI_P],
                                payload_innov=ekf.innov,
+                               payload_nis=ekf.nis,
+                               payload_rejected=(ekf.rejected
+                                                 if ekf.nis is not None
+                                                 else None),
                                payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
                                             P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
                                             P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
@@ -447,6 +451,10 @@ class ControlComms:
                             payload_alphadot=(xi[2], xi[3]),
                             payload_psi_p=xi[ekfm.IX_PSI_P],
                             payload_innov=ekf.innov,
+                            payload_nis=ekf.nis,
+                            payload_rejected=(ekf.rejected
+                                              if ekf.nis is not None
+                                              else None),
                             payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
                                          P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
                                          P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
@@ -504,6 +512,10 @@ class ControlComms:
                             payload_alphadot=(xi[2], xi[3]),
                             payload_psi_p=xi[ekfm.IX_PSI_P],
                             payload_innov=ekf.innov,
+                            payload_nis=ekf.nis,
+                            payload_rejected=(ekf.rejected
+                                              if ekf.nis is not None
+                                              else None),
                             payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
                                          P[ekfm.IX_ALPHA_Y, ekfm.IX_ALPHA_Y],
                                          P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_Y],
@@ -635,6 +647,10 @@ class ControlComms:
                                    payload_alphadot=(xi[2], xi[3]),
                                    payload_psi_p=xi[ekfm.IX_PSI_P],
                                    payload_innov=ekf.innov,
+                                   payload_nis=ekf.nis,
+                                   payload_rejected=(ekf.rejected
+                                                     if ekf.nis is not None
+                                                     else None),
                                    payload_cov=(P[ekfm.IX_ALPHA_X, ekfm.IX_ALPHA_X],
                                                 P[ekfm.IX_ALPHA_Y,
                                                     ekfm.IX_ALPHA_Y],
