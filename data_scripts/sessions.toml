@@ -3,9 +3,12 @@
 # yaw in force from that date until the next one, and a date with no entry
 # before it keeps whatever its own config_snapshot.json says. The computer
 # was remounted between the 2 Sep and 9 Sep 2026 tests, which turned the
-# camera around without the airframe file following it.
+# camera around without the airframe file following it. On 10 Sep the camera
+# itself was turned back to match the airframe file, so from then on the
+# snapshot is right again.
 [camera_yaw_deg]
 20260909 = 0
+20260910 = 180
 
 
 [sessions.20260723_114556]

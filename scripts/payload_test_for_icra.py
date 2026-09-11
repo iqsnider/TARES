@@ -31,6 +31,7 @@ if __name__ == '__main__':
     # the ramp onto speed, matched to the WPNAV_ACCEL the ardupilot baseline
     # flies so the two runs differ in the controller and nothing else
     accel = 2.0
+    jerk = 10
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09112026/payload_icra_test_{stamp}"
@@ -115,7 +116,8 @@ if __name__ == '__main__':
                                                ekf=ekf,
                                                yaw_lock=True,
                                                reassert=False,
-                                               anchor=False)
+                                               anchor=False,
+                                               jerk=jerk)
     finally:
         try:
             if controlLink is None or not controlLink.pilot_override:

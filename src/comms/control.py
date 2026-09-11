@@ -331,7 +331,7 @@ class ControlComms:
 
     def fly_payload_trajectory(self, ref, controller, duration, recorder, ekf,
                                yaw_lock=True, yaw_ref=None, reassert=False,
-                               anchor=True):
+                               anchor=True, jerk=5):
         """
         Closed-loop payload reference tracking
         """
@@ -360,6 +360,11 @@ class ControlComms:
         # set when the pilot takes the aircraft back, so the caller knows the
         # vehicle is no longer ours to command on the way out
         self.pilot_override = False
+        # guided shapes both accel and position targets with the position
+        # controller's jerk, not WPNAV_JERK. The name changed between
+        # firmware versions and an unknown name is ignored, so set both
+        self.set_param("PSC_JERK_XY", jerk)
+        self.set_param("PSC_NE_JERK", jerk)
 
         # trajectory.payload_trajectory builds the reference one tether length
         # straight below the drone, which is only where the payload is when it
@@ -555,7 +560,11 @@ class ControlComms:
         # reason that has nothing to do with the payload. Parameters, not
         # runtime state, so once is enough
         self.set_param("WPNAV_ACCEL", accel*100)
-        self.set_param("WPNAV_JERK", jerk)
+        # guided shapes both accel and position targets with the position
+        # controller's jerk, not WPNAV_JERK. The name changed between
+        # firmware versions and an unknown name is ignored, so set both
+        self.set_param("PSC_JERK_XY", jerk)
+        self.set_param("PSC_NE_JERK", jerk)
 
         # one relative ENU hop per side, walked in order. The zero hop first
         # settles the payload where it starts, the way the payload plan holds
@@ -563,10 +572,10 @@ class ControlComms:
         # the log so the reference covers the first leg and not just the last
         # three
         corners = [np.zeros(3),                                 # settle
-                   np.array([0, -edge_length, 0], dtype=float), # South
-                   np.array([-edge_length, 0, 0], dtype=float), # West
-                   np.array([0, edge_length, 0], dtype=float), # North
-                   np.array([edge_length, 0, 0], dtype=float)] # East
+                   np.array([0, -edge_length, 0], dtype=float),  # South
+                   np.array([-edge_length, 0, 0], dtype=float),  # West
+                   np.array([0, edge_length, 0], dtype=float),  # North
+                   np.array([edge_length, 0, 0], dtype=float)]  # East
 
         # intialize time for control loop
         t0 = time.time()

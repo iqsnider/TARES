@@ -36,7 +36,7 @@ if __name__ == '__main__':
     # how sharply that acceleration comes on. At 5 m/s^3 ardupilot reaches the
     # 2 m/s^2 in 0.4 s, which is about the reference's own 0.5 s ramp, so both
     # runs hit the payload with the same thing
-    jerk = 5
+    jerk = 10
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"data/test_09112026/ardupilot_icra_test_{stamp}"
