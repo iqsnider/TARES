@@ -15,6 +15,7 @@ data/
 *.avi
 out/
 figs/
+figures/
 
 
 # Distribution / packaging

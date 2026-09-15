@@ -37,66 +37,40 @@ def track(sel):
     """
     s = catalog.resolve(sel)
     df = s.fl
-    ref = df[["payload_px_ref", "payload_py_ref"]].dropna().to_numpy(float)
-    origin = ne_origin(ref)
+    ref = df[["payload_px_ref", "payload_py_ref"]].to_numpy(float)
+    origin = ne_origin(ref[np.isfinite(ref).all(1)])
 
     p, _ = payload_enu(df, L=s.config.get("TETHER_LEN"))
 
     return p[:, 0:2] - origin, ref - origin
 
 
-def cross_track(p, ref):
-    """
-    Distance from each payload sample to the reference square.
-
-    The square is axis aligned, so its outline is the bounding box of the
-    reference: points outside measure to the box, points inside to the nearest
-    edge. Both controllers are then measured against the same geometry, which
-    the logged references cannot do on their own because the ardupilot run
-    steps its reference to the next corner while the payload run ramps along it.
-    """
-    lo, hi = ref.min(0), ref.max(0)
-    inside = ((p > lo) & (p < hi)).all(1)
-    to_edge = np.minimum(np.abs(p - lo), np.abs(hi - p)).min(1)
-    outside = np.maximum(np.maximum(lo - p, p - hi), 0)
-
-    return np.where(inside, to_edge, np.hypot(outside[:, 0], outside[:, 1]))
-
-
 def errors(sel):
     """
-    Track error against the square, and swing speed, both RMS
+    Payload position error against the reference the run was chasing, RMS
     """
-    s = catalog.resolve(sel)
-    df = s.fl
-    L = s.config.get("TETHER_LEN")
     p, ref = track(sel)
-    swing = L*np.hypot(df["payload_alphadot_x"], df["payload_alphadot_y"])
+    track_err = np.hypot(*(p - ref).T)
 
-    return (np.sqrt(np.mean(cross_track(p, ref)**2)),
-            np.sqrt(np.nanmean(swing**2)))
+    return np.sqrt(np.nanmean(track_err**2))
 
 
 def rmse_figure(save=None):
     """
     What each controller cost, side by side
     """
-    fig, axes = plt.subplots(1, 2, figsize=(6.4, 3.0))
+    fig, ax = plt.subplots(figsize=(3.4, 3.0))
     names = {"ardupilot": "ArduPilot", "payload": "Payload"}
     colors = {"ardupilot": C_ARDUPILOT, "payload": C_PAYLOAD_CTRL}
-    vals = {sel: errors(sel) for sel, _ in RUNS}
 
-    for ax, k, ylabel in zip(axes, (0, 1),
-                             (r"Track error RMS [m]",
-                              r"Swing speed RMS [m/s]")):
-        for x, (sel, kind) in enumerate(RUNS):
-            ax.bar(x, vals[sel][k], width=0.6, color=colors[kind],
-                   edgecolor=C_INK, linewidth=0.9)
-        ax.set_xticks(range(len(RUNS)))
-        ax.set_xticklabels([names[kind] for _, kind in RUNS])
-        ax.set_ylabel(ylabel)
-        ax.grid(axis="x", visible=False)
-        _frame(ax)
+    for x, (sel, kind) in enumerate(RUNS):
+        ax.bar(x, errors(sel), width=0.6, color=colors[kind],
+               edgecolor=C_INK, linewidth=0.9)
+    ax.set_xticks(range(len(RUNS)))
+    ax.set_xticklabels([names[kind] for _, kind in RUNS])
+    ax.set_ylabel(r"Track error RMS [m]")
+    ax.grid(axis="x", visible=False)
+    _frame(ax)
 
     fig.tight_layout()
     if save:
